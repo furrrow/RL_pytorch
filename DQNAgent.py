@@ -32,52 +32,56 @@ class DQNAgent:
             self.target_model = SimpleModel(self.n_states, self.n_action)
             self.online_model.print_model(input_size=(batch_size, self.n_states))
         self.reward_record = []
+        self.rolling_average = []
+        self.loss_record = []
+        self.epoch_loss = []
         self.best_score = 75
         self.n_episodes = n_episodes
         self.batch_size = batch_size
         self.epsilon = epsilon
         self.lr = learning_rate
         self.update_interval = update_interval
+        self.solved = False
         if optimizer == "adam":
             self.optimizer = optim.Adam(self.online_model.parameters(), lr=learning_rate)
         elif optimizer == "rmsprop":
             self.optimizer = optim.RMSprop(self.online_model.parameters(), lr=learning_rate)
 
-    def optimize_model(self):
+    def optimize_miguel(self):
         transitions = self.buffer.sample(self.batch_size)
         (states, actions, next_states, rewards, is_terminals) = self.online_model.load(transitions)
         # states, actions, rewards, next_states, is_terminals = experiences
         # batch_size = len(is_terminals)
 
-        max_a_q_sp = self.target_model(next_states).detach().max(1)[0].unsqueeze(1)
-        target_q_sa = rewards + (self.gamma * max_a_q_sp * (1 - is_terminals))
-        q_sa = self.online_model(states).gather(1, actions.unsqueeze(1))
+        max_a_q_sp = self.target_model(next_states).detach().max(1)[0]  # (batch_size)
+        target_q_sa = rewards + (self.gamma * max_a_q_sp * (1 - is_terminals))  # (batch_size)
+        target_q_sa = target_q_sa.unsqueeze(1)  # (batch_size x 1)
+        q_sa = self.online_model(states).gather(1, actions.unsqueeze(1))  # (batch_size x 1)
 
         td_error = q_sa - target_q_sa
-        value_loss = td_error.pow(2).mul(0.5).mean()
+        # value_loss = td_error.pow(2).mul(0.5).mean()
+        criterion = torch.nn.MSELoss()
+        value_loss = criterion(q_sa, target_q_sa)
         self.optimizer.zero_grad()
         value_loss.backward()
         self.optimizer.step()
+        self.epoch_loss.append(value_loss.data.cpu().numpy().copy())
 
-    def optimize(self):
+    def optimize_jim(self):
         transitions = self.buffer.sample(self.batch_size)
         (states, actions, new_states, rewards, is_terminals) = self.online_model.load(transitions)
-        continue_mask = 1 - is_terminals  # if terminal, then = 0
+        continue_mask = 1 - is_terminals  # (batch_size)
         q_next = self.target_model(new_states).detach()  # gradient does NOT involve the target
-        q_next_max = q_next.max(1)[0].unsqueeze(1)
-        # target_q_sa = rewards + (self.gamma * max_a_q_sp * (1 - is_terminals))
-
-        q_target = rewards + torch.mul(q_next_max, continue_mask) * self.gamma
-        q_target = q_target.unsqueeze(1)  # batch_size x 1
-        q_values = self.online_model(states).gather(1, actions.unsqueeze(1))  # batch_size x 1
-#             criterion = nn.MSELoss()
-#             loss = criterion(q_values, q_target)
-        td_error = q_values - q_target
-        value_loss = td_error.pow(2).mul(0.5).mean()
-
+        q_next_max = q_next.max(1)[0]  # (batch_size)
+        q_target = rewards + q_next_max * continue_mask * self.gamma  # (batch_size)
+        q_target = q_target.unsqueeze(1)  # (batch_size x 1)
+        q_values = self.online_model(states).gather(1, actions.unsqueeze(1))  # (batch_size x 1)
+        criterion = torch.nn.MSELoss()
+        loss = criterion(q_values, q_target)
+        self.epoch_loss.append(loss.data.cpu().numpy().copy())
         # optimize
         self.optimizer.zero_grad()
-        value_loss.backward()
+        loss.backward()
         self.optimizer.step()
 
     def update_target_network(self):
@@ -119,7 +123,7 @@ class DQNAgent:
             state = self.env.reset()
             terminal = False
             tmp_reward = 0
-
+            self.epoch_loss = []
             while not terminal:
                 # select action
                 action = policy.select_action(self.online_model, state)
@@ -139,18 +143,24 @@ class DQNAgent:
                 # update target network periodically
                 if count % self.update_interval == 0:
                     self.update_target_network()
-
-                self.optimize_model()
+                self.optimize_jim()
 
             self.reward_record.append(tmp_reward)
-            rolling_average = sum(self.reward_record[-100:]) / 100
+            rolling_average = np.average(self.reward_record[-100:])
+            self.rolling_average.append(rolling_average)
+            avg_loss = np.average(self.epoch_loss)
+            self.loss_record.append(avg_loss)
             if episode % 10 == 0:
-                print("episode", episode, "reward", tmp_reward, "avg", rolling_average)
+                print("episode", episode, "reward", tmp_reward, "avg", round(rolling_average, 3), "loss", round(avg_loss, 3))
 
-            if episode > 100:
+            if not self.solved:
                 if rolling_average > 195:
-                    print("!!! last 100 episode avg reward:", rolling_average)
-                if tmp_reward > self.best_score:
-                    best_score = tmp_reward
-                    print("episode", episode, "new best score", best_score, "rolling avg", rolling_average)
-        return self.reward_record
+                    print("!!! exceeded benchmark at epoch", episode)
+                    print("!!! exceeded benchmark, last 100 episode avg reward:", round(rolling_average, 3))
+                    self.solved = True
+            if tmp_reward > self.best_score:
+                self.best_score = tmp_reward
+                print("episode", episode, "new best score", self.best_score, "rolling avg", round(rolling_average, 3))
+
+
+        return self.reward_record, self.rolling_average, self.loss_record
