@@ -2,11 +2,13 @@ import torch
 import torch.optim as optim
 import gym
 import numpy as np
+
+import utils
 from SimpleModel import SimpleModel
 from CNNModel import CNNModel
 from EGreedyStrategy import EGreedyStrategy
 from EGreedyExpStrategy import EGreedyExpStrategy
-
+from utils import mod_env
 
 class DQNAgent:
     def __init__(self,
@@ -20,20 +22,21 @@ class DQNAgent:
                  update_interval=10,
                  gamma=0.9995,
                  optimizer="adam",
-                 merge_rgb=False):
+                 modify_env=False):
         self.gamma = gamma
         self.buffer = buffer
         self.env_name = env_name
-        self.env = gym.make(env_name)
+        self.modify_env = modify_env
+        if modify_env:
+            self.env = utils.mod_env(env_name)
+        else:
+            self.env = gym.make(env_name)
         self.env.reset()
-        (w, h, c) = self.env.observation_space.shape
-        if merge_rgb:
-            c = 1
+        (c, w, h) = self.env.observation_space.shape
         self.input_shape = (c, w, h)
         self.n_states = self.env.observation_space.shape[0]
         self.n_action = self.env.action_space.n
         self.model_name = model_name
-        self.merge_rgb = merge_rgb
         if model_name == "simple":
             self.online_model = SimpleModel(self.n_states, self.n_action)
             self.target_model = SimpleModel(self.n_states, self.n_action)
@@ -47,7 +50,7 @@ class DQNAgent:
         self.rolling_average = []
         self.loss_record = []
         self.epoch_loss = []
-        self.best_score = 75
+        self.best_score = -20
         self.n_episodes = n_episodes
         self.batch_size = batch_size
         self.epsilon = epsilon
@@ -107,16 +110,12 @@ class DQNAgent:
 
         while self.buffer.length() < initial_size:
             state = self.env.reset()
-            if self.merge_rgb:
-                state = np.expand_dims(np.mean(state, axis=2), axis=0)
             terminal = False
             tmp_reward = 0
 
             while not terminal:
                 action = self.env.action_space.sample()
                 (next_state, reward, done, info) = self.env.step(action)
-                if self.merge_rgb:
-                    next_state = np.expand_dims(np.mean(next_state, axis=2), axis=0)
                 if ("TimeLimit" in info):
                     print(info)
                     print("terminating episode...")
@@ -138,8 +137,6 @@ class DQNAgent:
             print("policy not yet implemented")
         for episode in range(self.n_episodes):
             state = self.env.reset()
-            if self.merge_rgb:
-                state = np.expand_dims(np.mean(state, axis=2), axis=0)
             terminal = False
             tmp_reward = 0
             self.epoch_loss = []
@@ -147,8 +144,6 @@ class DQNAgent:
                 # select action
                 action = policy.select_action(self.online_model, state)
                 (next_state, reward, done, info) = self.env.step(action)
-                if self.merge_rgb:
-                    next_state = np.expand_dims(np.mean(next_state, axis=2), axis=0)
                 # handle cases when it reaches a time limit but not actually terminal
                 if ("TimeLimit" in info):
                     print(info)

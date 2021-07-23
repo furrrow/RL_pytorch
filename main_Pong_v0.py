@@ -9,6 +9,10 @@ input shape: (210, 160, 3)
 action space: Discrete(6)
 action meanings: ['NOOP', 'FIRE', 'RIGHT', 'LEFT', 'RIGHTFIRE', 'LEFTFIRE']
 
+world model, scale it to 64 by 64, kept all three channels
+for this case, we can try 84 by 84, greyscale, frameskip 4, stack 4
+
+
 """
 
 # create the buffer
@@ -23,9 +27,9 @@ agent = DQNAgent(replay_buffer,
                  batch_size=32,
                  learning_rate=0.0005,
                  update_interval=150,
-                 gamma=1,
+                 gamma=0.995,
                  optimizer="adam",
-                 merge_rgb=True)
+                 modify_env=True)
 
 agent.populate_buffer()
 record, rolling_avg, loss_record = agent.train(policy_name="egreedyexp")
