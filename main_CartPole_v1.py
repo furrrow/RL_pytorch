@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 
 # create the buffer
 replay_buffer = ReplayBuffer(capacity=500000)
+# env_name="CartPole-v1 can use SimpleModel
+# try Pong-v0 later
 
 # create agent
 agent = DQNAgent(replay_buffer,

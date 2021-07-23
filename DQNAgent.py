@@ -3,6 +3,7 @@ import torch.optim as optim
 import gym
 import numpy as np
 from SimpleModel import SimpleModel
+from CNNModel import CNNModel
 from EGreedyStrategy import EGreedyStrategy
 from EGreedyExpStrategy import EGreedyExpStrategy
 
@@ -18,19 +19,30 @@ class DQNAgent:
                  epsilon=0.0005,
                  update_interval=10,
                  gamma=0.9995,
-                 optimizer="adam"):
+                 optimizer="adam",
+                 merge_rgb=False):
         self.gamma = gamma
         self.buffer = buffer
         self.env_name = env_name
         self.env = gym.make(env_name)
         self.env.reset()
+        (w, h, c) = self.env.observation_space.shape
+        if merge_rgb:
+            c = 1
+        self.input_shape = (c, w, h)
         self.n_states = self.env.observation_space.shape[0]
         self.n_action = self.env.action_space.n
         self.model_name = model_name
+        self.merge_rgb = merge_rgb
         if model_name == "simple":
             self.online_model = SimpleModel(self.n_states, self.n_action)
             self.target_model = SimpleModel(self.n_states, self.n_action)
             self.online_model.print_model(input_size=(batch_size, self.n_states))
+        elif model_name == "cnn":
+            self.online_model = CNNModel(self.input_shape, self.n_action)
+            self.target_model = CNNModel(self.input_shape, self.n_action)
+            full_shape = (batch_size, c, w, h)
+            self.online_model.print_model(input_size=full_shape)
         self.reward_record = []
         self.rolling_average = []
         self.loss_record = []
@@ -42,6 +54,7 @@ class DQNAgent:
         self.lr = learning_rate
         self.update_interval = update_interval
         self.solved = False
+
         if optimizer == "adam":
             self.optimizer = optim.Adam(self.online_model.parameters(), lr=learning_rate)
         elif optimizer == "rmsprop":
@@ -94,12 +107,16 @@ class DQNAgent:
 
         while self.buffer.length() < initial_size:
             state = self.env.reset()
+            if self.merge_rgb:
+                state = np.expand_dims(np.mean(state, axis=2), axis=0)
             terminal = False
             tmp_reward = 0
 
             while not terminal:
                 action = self.env.action_space.sample()
                 (next_state, reward, done, info) = self.env.step(action)
+                if self.merge_rgb:
+                    next_state = np.expand_dims(np.mean(next_state, axis=2), axis=0)
                 if ("TimeLimit" in info):
                     print(info)
                     print("terminating episode...")
@@ -121,6 +138,8 @@ class DQNAgent:
             print("policy not yet implemented")
         for episode in range(self.n_episodes):
             state = self.env.reset()
+            if self.merge_rgb:
+                state = np.expand_dims(np.mean(state, axis=2), axis=0)
             terminal = False
             tmp_reward = 0
             self.epoch_loss = []
@@ -128,6 +147,8 @@ class DQNAgent:
                 # select action
                 action = policy.select_action(self.online_model, state)
                 (next_state, reward, done, info) = self.env.step(action)
+                if self.merge_rgb:
+                    next_state = np.expand_dims(np.mean(next_state, axis=2), axis=0)
                 # handle cases when it reaches a time limit but not actually terminal
                 if ("TimeLimit" in info):
                     print(info)
@@ -150,7 +171,7 @@ class DQNAgent:
             self.rolling_average.append(rolling_average)
             avg_loss = np.average(self.epoch_loss)
             self.loss_record.append(avg_loss)
-            if episode % 10 == 0:
+            if episode % 1 == 0:
                 print("episode", episode, "reward", tmp_reward, "avg", round(rolling_average, 3), "loss", round(avg_loss, 3))
 
             if not self.solved:
