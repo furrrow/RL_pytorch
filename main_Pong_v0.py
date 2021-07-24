@@ -16,17 +16,17 @@ for this case, we can try 84 by 84, greyscale, frameskip 4, stack 4
 """
 
 # create the buffer
-replay_buffer = ReplayBuffer(capacity=500)
+replay_buffer = ReplayBuffer(capacity=25000)
 
 # create agent
 agent = DQNAgent(replay_buffer,
                  env_name="Pong-v0",
                  model_name="cnn",
-                 n_episodes=50,
+                 n_episodes=1000,
                  epsilon=0.5,
                  batch_size=32,
                  learning_rate=0.0005,
-                 update_interval=150,
+                 update_interval=500,
                  gamma=0.995,
                  optimizer="adam",
                  modify_env=True)

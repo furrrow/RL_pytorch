@@ -159,6 +159,7 @@ class DQNAgent:
                 # update target network periodically
                 if count % self.update_interval == 0:
                     self.update_target_network()
+                    # print("updated target network!")
                 self.optimize_jim()
 
             self.reward_record.append(tmp_reward)
@@ -167,10 +168,11 @@ class DQNAgent:
             avg_loss = np.average(self.epoch_loss)
             self.loss_record.append(avg_loss)
             if episode % 1 == 0:
-                print("episode", episode, "reward", tmp_reward, "avg", round(rolling_average, 3), "loss", round(avg_loss, 3))
+                print("episode", episode, "reward", tmp_reward, "avg", round(rolling_average, 3),
+                      "loss", round(avg_loss, 3), "step count", count)
 
             if not self.solved:
-                if rolling_average > 195:
+                if rolling_average > 19:
                     print("!!! exceeded benchmark at epoch", episode)
                     print("!!! exceeded benchmark, last 100 episode avg reward:", round(rolling_average, 3))
                     self.solved = True
