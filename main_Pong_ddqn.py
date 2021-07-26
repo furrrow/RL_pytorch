@@ -1,25 +1,31 @@
 from ReplayBuffer import ReplayBuffer
 from DQNAgent import DQNAgent
+from DDQNAgent import DDQNAgent
 import numpy as np
 import matplotlib.pyplot as plt
 
+"""
+Pong-v0, except using ddqn
+
+
+"""
+
 # create the buffer
-replay_buffer = ReplayBuffer(capacity=500000)
-# env_name="CartPole-v1 can use SimpleModel
-# try Pong-v0 later
+replay_buffer = ReplayBuffer(capacity=100000)
 
 # create agent
-agent = DQNAgent(replay_buffer,
-                 env_name="CartPole-v1",
-                 model_name="simple",
-                 n_episodes=300,
-                 epsilon=0.5,
-                 batch_size=64,
-                 learning_rate=0.0005,
-                 update_interval=150,
-                 gamma=1,
-                 optimizer="adam",
-                 modify_env=False)
+agent = DDQNAgent(replay_buffer,
+                  env_name="Pong-v0",
+                  model_name="cnn",
+                  n_episodes=1000,
+                  epsilon=0.5,
+                  batch_size=32,
+                  learning_rate=0.0005,
+                  update_interval=10000,
+                  gamma=0.995,
+                  optimizer="adam",
+                  modify_env=True)
+
 agent.populate_buffer()
 record, rolling_avg, loss_record = agent.train(policy_name="egreedyexp")
 x = np.arange(len(record))
@@ -32,4 +38,3 @@ rewards_plot.plot(x, loss_record, label="loss")
 rewards_plot.legend()
 plt.savefig('rewards_plot.png')
 plt.show()
-

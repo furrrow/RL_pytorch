@@ -11,7 +11,7 @@ from EGreedyExpStrategy import EGreedyExpStrategy
 from RandomStrategy import RandomStrategy
 
 
-class DQNAgent:
+class DDQNAgent:
     def __init__(self,
                  buffer,
                  env_name,
@@ -24,7 +24,7 @@ class DQNAgent:
                  gamma=0.9995,
                  optimizer="adam",
                  modify_env=False,
-                 render=True):
+                 render=False):
         self.gamma = gamma
         self.buffer = buffer
         self.env_name = env_name
@@ -72,17 +72,18 @@ class DQNAgent:
         # states, actions, rewards, next_states, is_terminals = experiences
         # batch_size = len(is_terminals)
 
-        max_a_q_sp = self.target_model(next_states).detach().max(1)[0]  # (batch_size)
-        target_q_sa = rewards + (self.gamma * max_a_q_sp * (1 - is_terminals))  # (batch_size)
-        target_q_sa = target_q_sa.unsqueeze(1)  # (batch_size x 1)
-        q_sa = self.online_model(states).gather(1, actions.unsqueeze(1))  # (batch_size x 1)
+        # argmax_a_q_sp = self.target_model(next_states).max(1)[1]
+        argmax_a_q_sp = self.online_model(next_states).max(1)[1]
+        q_sp = self.target_model(next_states).detach()
+        max_a_q_sp = q_sp[np.arange(self.batch_size), argmax_a_q_sp].unsqueeze(1)  # (batch_size, 1)
+        target_q_sa = rewards + (self.gamma * max_a_q_sp * (1 - is_terminals))
+        q_sa = self.online_model(states).gather(1, actions.unsqueeze(1))
 
         td_error = q_sa - target_q_sa
-        # value_loss = td_error.pow(2).mul(0.5).mean()
-        criterion = torch.nn.SmoothL1Loss()  # MSELoss()
-        value_loss = criterion(q_sa, target_q_sa)
+        value_loss = td_error.pow(2).mul(0.5).mean()
         self.optimizer.zero_grad()
         value_loss.backward()
+        # torch.nn.utils.clip_grad_norm_(self.online_model.parameters(), self.max_gradient_norm)
         self.optimizer.step()
         self.epoch_loss.append(value_loss.data.cpu().numpy().copy())
 
@@ -90,12 +91,14 @@ class DQNAgent:
         transitions = self.buffer.sample(self.batch_size)
         (states, actions, new_states, rewards, is_terminals) = self.online_model.load(transitions)
         continue_mask = 1 - is_terminals  # (batch_size)
+        q_next_argmax = self.online_model(new_states).max(1)[1]  # (batch_size)
         q_next = self.target_model(new_states).detach()  # gradient does NOT involve the target
-        q_next_max = q_next.max(1)[0]  # (batch_size)
+        q_next_max = q_next[np.arange(self.batch_size), q_next_argmax]
         q_target = rewards + q_next_max * continue_mask * self.gamma  # (batch_size)
         q_target = q_target.unsqueeze(1)  # (batch_size x 1)
         q_values = self.online_model(states).gather(1, actions.unsqueeze(1))  # (batch_size x 1)
-        criterion = torch.nn.MSELoss()
+        # criterion = torch.nn.MSELoss()
+        criterion = torch.nn.SmoothL1Loss()
         loss = criterion(q_values, q_target)
         self.epoch_loss.append(loss.data.cpu().numpy().copy())
         # optimize
@@ -168,9 +171,9 @@ class DQNAgent:
                 # update target network periodically
                 if (count + total_count) % self.update_interval == 0:
                     self.update_target_network()
-                    self.env.render()
                     print("updated target network!")
                 self.optimize_jim()
+                # self.optimize_miguel()
             self.render = False  # reset render flag
             total_count += count
             self.reward_record.append(tmp_reward)

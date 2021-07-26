@@ -148,8 +148,8 @@ class DQNAgent:
             self.epoch_loss = []
             while not terminal:
                 # render if needed
-                if self.render:
-                    self.env.render()
+                # if self.render:
+                    # self.env.render()
                 # select action
                 action = policy.select_action(self.online_model, state)
                 (next_state, reward, done, info) = self.env.step(action)
@@ -168,8 +168,7 @@ class DQNAgent:
                 # update target network periodically
                 if (count + total_count) % self.update_interval == 0:
                     self.update_target_network()
-                    self.env.render()
-                    print("updated target network!")
+                    # print("updated target network!")
                 self.optimize_jim()
             self.render = False  # reset render flag
             total_count += count

@@ -1,42 +1,26 @@
 from ReplayBuffer import ReplayBuffer
 from DQNAgent import DQNAgent
+from DDQNAgent import DDQNAgent
 import numpy as np
 import matplotlib.pyplot as plt
 
-"""
-Pong-ram-v0
-the observation is the RAM of the Atari machine, consisting of (only!) 128 bytes. 
-Each action is repeatedly performed for a duration of kk frames, where kk is uniformly sampled from 
-{2,3,4}.
-input shape: (128,)
-action space: Discrete(6)
-action meanings: ['NOOP', 'FIRE', 'RIGHT', 'LEFT', 'RIGHTFIRE', 'LEFTFIRE']
-
-reshape to a square shape then apply cnn model?
-or just do fully connected?
-
-to be implemented... 
-
-
-"""
-
 # create the buffer
-replay_buffer = ReplayBuffer(capacity=25000)
+replay_buffer = ReplayBuffer(capacity=500000)
+# env_name="CartPole-v1 can use SimpleModel
+# try Pong-v0 later
 
 # create agent
 agent = DQNAgent(replay_buffer,
-                 # env_name="Pong-v0",
-                 env_name="Pong-ram-v0",
+                 env_name="CartPole-v1",
                  model_name="simple",
-                 n_episodes=1000,
+                 n_episodes=300,
                  epsilon=0.5,
-                 batch_size=32,
+                 batch_size=64,
                  learning_rate=0.0005,
-                 update_interval=1000,
-                 gamma=0.995,
+                 update_interval=150,
+                 gamma=1,
                  optimizer="adam",
                  modify_env=False)
-
 agent.populate_buffer()
 record, rolling_avg, loss_record = agent.train(policy_name="egreedyexp")
 x = np.arange(len(record))
@@ -49,4 +33,3 @@ rewards_plot.plot(x, loss_record, label="loss")
 rewards_plot.legend()
 plt.savefig('rewards_plot.png')
 plt.show()
-
