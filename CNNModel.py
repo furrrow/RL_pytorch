@@ -16,8 +16,8 @@ class CNNModel(nn.Module):
         self.input_shape = input_shape
         self.outputs = outputs
         c = input_shape[0]
-        w = input_shape[1]
-        h = input_shape[2]
+        h = input_shape[1]
+        w = input_shape[2]
         self.conv1 = nn.Conv2d(in_channels=c, out_channels=32, kernel_size=5, stride=2)
         self.bn1 = nn.BatchNorm2d(32)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=5, stride=2)
@@ -33,7 +33,8 @@ class CNNModel(nn.Module):
         convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(w)))
         convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h)))
         linear_input_size = convw * convh * 32
-        self.fc = nn.Linear(linear_input_size, outputs)
+        self.fc1 = nn.Linear(linear_input_size, 1024)
+        self.fc2 = nn.Linear(1024, outputs)
 
         device = "cpu"
         if torch.cuda.is_available():
@@ -55,13 +56,12 @@ class CNNModel(nn.Module):
     def forward(self, x):
         x = self._format(x)
         x = x.to(self.device)
-        # x = F.relu(self.bn1(self.conv1(x)))
-        # x = F.relu(self.bn2(self.conv2(x)))
-        # x = F.relu(self.bn3(self.conv3(x)))
-        x = F.relu((self.conv1(x)))
-        x = F.relu((self.conv2(x)))
-        x = F.relu((self.conv3(x)))
-        return self.fc(x.view(x.size(0), -1))
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = F.relu(self.fc1(x.view(x.size(0), -1)))
+        x = F.relu(self.fc2(x))
+        return x
 
     def load(self, buffer):
         batch = Transition(*zip(*buffer))

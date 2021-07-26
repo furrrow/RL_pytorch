@@ -3,6 +3,7 @@ from abc import ABC
 from PIL import Image, ImageOps
 import gym
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 def render_env(env, policy, gif_name):
@@ -51,37 +52,29 @@ class SkipEnv(gym.Wrapper):
         return state, total_reward, done, info
 
 
-class ShapeFrame(gym.ObservationWrapper):
-    def __init__(self, env, shape=(84, 84, 1)):
-        super(ShapeFrame, self).__init__(env)
+class ProcessFrame(gym.ObservationWrapper):
+    def __init__(self, env, shape=(1, 84, 84)):
+        super(ProcessFrame, self).__init__(env)
         self.crop_shape = shape
-        self.observation_space = gym.spaces.Box(low=0, high=255,
-                                                shape=self.crop_shape, dtype=np.uint8)
+        self.observation_space = gym.spaces.Box(low=np.float32(0), high=np.float32(1.0),
+                                                shape=self.crop_shape, dtype=np.float32)
 
     def observation(self, obs):
         img = Image.fromarray(obs)
         greyscale = ImageOps.grayscale(img)
         cropped = greyscale.crop((0, 25, 160, 200))
-        reshaped = cropped.resize(self.crop_shape[0:2])
-        return np.asarray(reshaped).reshape(self.crop_shape)
-
-
-class MakeChannelFirst(gym.ObservationWrapper):
-    def __init__(self, env):
-        super(MakeChannelFirst, self).__init__(env)
-        shape = self.observation_space.shape
-        new_shape = (shape[2], shape[0], shape[1])
-        self.observation_space = gym.spaces.Box(low=0, high=1, shape=new_shape, dtype=np.float32)
-
-    def observation(self, observation):
-        return np.moveaxis(observation, 2, 0)
+        reshaped = cropped.resize(self.crop_shape[1:3])
+        new_obs = np.asarray(reshaped).reshape(self.crop_shape)
+        # plt.imshow(new_obs)
+        rescaled = new_obs / 255.0
+        return rescaled
 
 
 class BufferWrapper(gym.ObservationWrapper):
     def __init__(self, env, n_steps):
         super(BufferWrapper, self).__init__(env)
-        low = env.observation_space.low.repeat(n_steps, axis=0)
-        high = env.observation_space.high.repeat(n_steps, axis=0)
+        low = env.observation_space.low.repeat(n_steps, axis=0)  # (4, 84, 84)
+        high = env.observation_space.high.repeat(n_steps, axis=0)  # (4, 84, 84)
         self.buffer = np.zeros_like(low, dtype=np.float32)
         self.observation_space = gym.spaces.Box(low, high, dtype=np.float32)
 
@@ -94,16 +87,9 @@ class BufferWrapper(gym.ObservationWrapper):
         return self.buffer
 
 
-class ScaleFrame(gym.ObservationWrapper):
-    def observation(self, observation):
-        return np.array(observation).astype(np.float32) / 255.0
-
-
-def mod_env(env_name):
+def mod_env(env_name, shape=(1, 84, 84)):
     env = gym.make(env_name)
     env = SkipEnv(env)
-    env = ShapeFrame(env)
-    env = MakeChannelFirst(env)
-    env = ScaleFrame(env)
+    env = ProcessFrame(env, shape=shape)
     env = BufferWrapper(env, 4)
     return env

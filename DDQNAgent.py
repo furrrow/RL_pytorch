@@ -42,11 +42,11 @@ class DQNAgent:
             self.target_model = SimpleModel(self.n_states, self.n_action)
             self.online_model.print_model(input_size=(batch_size, self.n_states))
         elif model_name == "cnn":
-            (c, h, w) = self.env.observation_space.shape
-            self.input_shape = (c, h, w)
+            (c, w, h) = self.env.observation_space.shape
+            self.input_shape = (c, w, h)
             self.online_model = CNNModel(self.input_shape, self.n_action)
             self.target_model = CNNModel(self.input_shape, self.n_action)
-            full_shape = (batch_size, c, h, w)
+            full_shape = (batch_size, c, w, h)
             self.online_model.print_model(input_size=full_shape)
         self.reward_record = []
         self.rolling_average = []
