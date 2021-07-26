@@ -22,7 +22,8 @@ class DQNAgent:
                  update_interval=10,
                  gamma=0.9995,
                  optimizer="adam",
-                 modify_env=False):
+                 modify_env=False,
+                 render=True):
         self.gamma = gamma
         self.buffer = buffer
         self.env_name = env_name
@@ -32,8 +33,6 @@ class DQNAgent:
         else:
             self.env = gym.make(env_name)
         self.env.reset()
-        (c, w, h) = self.env.observation_space.shape
-        self.input_shape = (c, w, h)
         self.n_states = self.env.observation_space.shape[0]
         self.n_action = self.env.action_space.n
         self.model_name = model_name
@@ -42,6 +41,8 @@ class DQNAgent:
             self.target_model = SimpleModel(self.n_states, self.n_action)
             self.online_model.print_model(input_size=(batch_size, self.n_states))
         elif model_name == "cnn":
+            (c, w, h) = self.env.observation_space.shape
+            self.input_shape = (c, w, h)
             self.online_model = CNNModel(self.input_shape, self.n_action)
             self.target_model = CNNModel(self.input_shape, self.n_action)
             full_shape = (batch_size, c, w, h)
@@ -57,6 +58,7 @@ class DQNAgent:
         self.lr = learning_rate
         self.update_interval = update_interval
         self.solved = False
+        self.render = render
 
         if optimizer == "adam":
             self.optimizer = optim.Adam(self.online_model.parameters(), lr=learning_rate)
@@ -128,7 +130,7 @@ class DQNAgent:
         print(self.buffer.length(), "entries saved to ReplayBuffer")
 
     def train(self, policy_name="egreedy"):
-        count = 0
+        total_count = 0
         if policy_name == "egreedy":
             policy = EGreedyStrategy(epsilon=self.epsilon)
         elif policy_name == "egreedyexp":
@@ -136,11 +138,15 @@ class DQNAgent:
         else:
             print("policy not yet implemented")
         for episode in range(self.n_episodes):
+            count = 0
             state = self.env.reset()
             terminal = False
             tmp_reward = 0
             self.epoch_loss = []
             while not terminal:
+                # render if needed
+                if self.render:
+                    self.env.render()
                 # select action
                 action = policy.select_action(self.online_model, state)
                 (next_state, reward, done, info) = self.env.step(action)
@@ -157,22 +163,25 @@ class DQNAgent:
                 count += 1
 
                 # update target network periodically
-                if count % self.update_interval == 0:
+                if (count + total_count) % self.update_interval == 0:
                     self.update_target_network()
                     # print("updated target network!")
                 self.optimize_jim()
-
+            self.render = False  # reset render flag
+            total_count += count
             self.reward_record.append(tmp_reward)
             rolling_average = np.average(self.reward_record[-100:])
             self.rolling_average.append(rolling_average)
             avg_loss = np.average(self.epoch_loss)
             self.loss_record.append(avg_loss)
-            if episode % 1 == 0:
+            if episode % 5 == 0:
                 print("episode", episode, "reward", tmp_reward, "avg", round(rolling_average, 3),
                       "loss", round(avg_loss, 3), "step count", count)
+            if episode % 10 == 0:
+                self.render = True  # render the next episode
 
             if not self.solved:
-                if rolling_average > 19:
+                if rolling_average > 2.5:
                     print("!!! exceeded benchmark at epoch", episode)
                     print("!!! exceeded benchmark, last 100 episode avg reward:", round(rolling_average, 3))
                     self.solved = True

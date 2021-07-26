@@ -4,13 +4,18 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 """
-information I can find on Pong-V0
-input shape: (210, 160, 3)
+Pong-ram-v0
+the observation is the RAM of the Atari machine, consisting of (only!) 128 bytes. 
+Each action is repeatedly performed for a duration of kk frames, where kk is uniformly sampled from 
+{2,3,4}.
+input shape: (128,)
 action space: Discrete(6)
 action meanings: ['NOOP', 'FIRE', 'RIGHT', 'LEFT', 'RIGHTFIRE', 'LEFTFIRE']
 
-world model, scale it to 64 by 64, kept all three channels
-for this case, we can try 84 by 84, greyscale, frameskip 4, stack 4
+reshape to a square shape then apply cnn model?
+or just do fully connected?
+
+to be implemented... 
 
 
 """
@@ -20,17 +25,17 @@ replay_buffer = ReplayBuffer(capacity=25000)
 
 # create agent
 agent = DQNAgent(replay_buffer,
-                 env_name="Pong-v0",
-                 model_name="cnn",
-                 n_episodes=2000,
+                 # env_name="Pong-v0",
+                 env_name="Pong-ram-v0",
+                 model_name="simple",
+                 n_episodes=1000,
                  epsilon=0.5,
                  batch_size=32,
-                 learning_rate=0.001,
-                 update_interval=2000,
+                 learning_rate=0.0005,
+                 update_interval=1000,
                  gamma=0.995,
                  optimizer="adam",
-                 modify_env=True,
-                 render=True)
+                 modify_env=False)
 
 agent.populate_buffer()
 record, rolling_avg, loss_record = agent.train(policy_name="egreedyexp")

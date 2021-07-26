@@ -23,7 +23,7 @@ def render_env(env, policy, gif_name):
     print(tmp_rewards)
     env.close()
     image_name = gif_name + ".gif"
-    frame_images = [PIL.Image.fromarray(frame) for frame in frames]
+    frame_images = [Image.fromarray(frame) for frame in frames]
     frame_images[0].save(image_name, format='GIF', append_images=frame_images[1:], save_all=True, duration=30, loop=0)
 
 
