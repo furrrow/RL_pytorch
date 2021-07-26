@@ -3,7 +3,7 @@ import torch.optim as optim
 import gym
 import numpy as np
 
-import utils
+import test_utils as utils
 from SimpleModel import SimpleModel
 from CNNModel import CNNModel
 from EGreedyStrategy import EGreedyStrategy
