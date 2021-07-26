@@ -16,7 +16,7 @@ for this case, we can try 84 by 84, greyscale, frameskip 4, stack 4
 """
 
 # create the buffer
-replay_buffer = ReplayBuffer(capacity=25000)
+replay_buffer = ReplayBuffer(capacity=100000)
 
 # create agent
 agent = DQNAgent(replay_buffer,
@@ -26,7 +26,7 @@ agent = DQNAgent(replay_buffer,
                  epsilon=0.5,
                  batch_size=32,
                  learning_rate=0.001,
-                 update_interval=2000,
+                 update_interval=5000,
                  gamma=0.995,
                  optimizer="adam",
                  modify_env=True,

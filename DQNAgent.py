@@ -8,7 +8,8 @@ from SimpleModel import SimpleModel
 from CNNModel import CNNModel
 from EGreedyStrategy import EGreedyStrategy
 from EGreedyExpStrategy import EGreedyExpStrategy
-from utils import mod_env
+from RandomStrategy import RandomStrategy
+
 
 class DQNAgent:
     def __init__(self,
@@ -135,6 +136,8 @@ class DQNAgent:
             policy = EGreedyStrategy(epsilon=self.epsilon)
         elif policy_name == "egreedyexp":
             policy = EGreedyExpStrategy(init_epsilon=1.0, min_epsilon=0.1, decay_steps=20000)
+        elif policy_name == "random":
+            policy = RandomStrategy()
         else:
             print("policy not yet implemented")
         for episode in range(self.n_episodes):
@@ -165,7 +168,8 @@ class DQNAgent:
                 # update target network periodically
                 if (count + total_count) % self.update_interval == 0:
                     self.update_target_network()
-                    # print("updated target network!")
+                    self.env.render()
+                    print("updated target network!")
                 self.optimize_jim()
             self.render = False  # reset render flag
             total_count += count

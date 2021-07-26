@@ -29,13 +29,9 @@ def render_env(env, policy, gif_name):
 
 """
 gym wrappers!!
-credit to youtube video below on how to handle gym wrappers:
-https://www.youtube.com/watch?v=a5XbO5Qgy5w&t=2441s&ab_channel=MachineLearningwithPhil
-
-need verifications on this...   
- > some environments will repeate your action n times,
- > but may randomly(25%) select an action other than action chosen
-
+credit to work below:
+https://github.com/philtabor/Youtube-Code-Repository/blob/master/ReinforcementLearning/DeepQLearning/utils.py
+https://github.com/Arrabonae/openai_DDDQN/blob/master/env.py
 """
 
 
@@ -45,32 +41,29 @@ class SkipEnv(gym.Wrapper):
         self.skip = skip
 
     def step(self, action):
+        total_reward = 0
         (state, reward, done, info) = (None, 0, False, None)
         for i in range(self.skip):
             (state, reward, done, info) = self.env.step(action)
-            reward += reward
+            total_reward += reward
             if done:
                 break
-        return state, reward, done, info
+        return state, total_reward, done, info
 
 
-class PreProcessFrame(gym.ObservationWrapper):
+class ShapeFrame(gym.ObservationWrapper):
     def __init__(self, env, shape=(84, 84, 1)):
-        super(PreProcessFrame, self).__init__(env)
+        super(ShapeFrame, self).__init__(env)
         self.crop_shape = shape
         self.observation_space = gym.spaces.Box(low=0, high=255,
                                                 shape=self.crop_shape, dtype=np.uint8)
 
     def observation(self, obs):
-        return PreProcessFrame.process(obs, self.crop_shape)
-
-    @staticmethod
-    def process(frame, crop_shape):
-        img = Image.fromarray(frame)
+        img = Image.fromarray(obs)
         greyscale = ImageOps.grayscale(img)
         cropped = greyscale.crop((0, 25, 160, 200))
-        reshaped = cropped.resize(crop_shape[0:2])
-        return np.asarray(reshaped).reshape(crop_shape)
+        reshaped = cropped.resize(self.crop_shape[0:2])
+        return np.asarray(reshaped).reshape(self.crop_shape)
 
 
 class MakeChannelFirst(gym.ObservationWrapper):
@@ -82,11 +75,6 @@ class MakeChannelFirst(gym.ObservationWrapper):
 
     def observation(self, observation):
         return np.moveaxis(observation, 2, 0)
-
-
-class ScaleFrame(gym.ObservationWrapper):
-    def observation(self, observation):
-        return np.array(observation).astype(np.float32) / 255.0
 
 
 class BufferWrapper(gym.ObservationWrapper):
@@ -101,15 +89,21 @@ class BufferWrapper(gym.ObservationWrapper):
         return self.observation(self.env.reset())
 
     def observation(self, observation):
-        self.buffer[:-1] = self.buffer[1:]
-        self.buffer[-1] = observation
+        self.buffer[:-1] = self.buffer[1:]  # shift first three img forward
+        self.buffer[-1] = observation  # append latest observation into buffer
         return self.buffer
+
+
+class ScaleFrame(gym.ObservationWrapper):
+    def observation(self, observation):
+        return np.array(observation).astype(np.float32) / 255.0
 
 
 def mod_env(env_name):
     env = gym.make(env_name)
     env = SkipEnv(env)
-    env = PreProcessFrame(env)
+    env = ShapeFrame(env)
     env = MakeChannelFirst(env)
+    env = ScaleFrame(env)
     env = BufferWrapper(env, 4)
-    return ScaleFrame(env)
+    return env
