@@ -74,7 +74,7 @@ class StackFrames(gym.ObservationWrapper):
 
         return obs
 
-def make_env(env_name, shape=(84,84,1), skip=4):
+def mod_env(env_name, shape=(84,84,1), skip=4):
     np.warnings.filterwarnings('ignore', category=np.VisibleDeprecationWarning)
     env = gym.make(env_name)
     env = RepeatActionAndMaxFrame(env, skip)
