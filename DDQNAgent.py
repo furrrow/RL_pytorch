@@ -3,8 +3,8 @@ import torch.optim as optim
 import gym
 import numpy as np
 
-# import utils
-import test_utils as utils
+import utils
+# import test_utils as utils
 from SimpleModel import SimpleModel
 from CNNModel import CNNModel
 from EGreedyStrategy import EGreedyStrategy
@@ -77,7 +77,7 @@ class DDQNAgent:
         argmax_a_q_sp = self.online_model(next_states).max(1)[1]
         q_sp = self.target_model(next_states).detach()
         max_a_q_sp = q_sp[np.arange(self.batch_size), argmax_a_q_sp].unsqueeze(1)  # (batch_size, 1)
-        target_q_sa = rewards + (self.gamma * max_a_q_sp * (1 - is_terminals))
+        target_q_sa = rewards.unsqueeze(1) + (self.gamma * max_a_q_sp * (1 - is_terminals).unsqueeze(1))
         q_sa = self.online_model(states).gather(1, actions.unsqueeze(1))
 
         td_error = q_sa - target_q_sa
@@ -173,8 +173,8 @@ class DDQNAgent:
                 if (count + total_count) % self.update_interval == 0:
                     self.update_target_network()
                     print("updated target network!")
-                self.optimize_jim()
-                # self.optimize_miguel()
+                # self.optimize_jim()
+                self.optimize_miguel()
             self.render = False  # reset render flag
             total_count += count
             self.reward_record.append(tmp_reward)

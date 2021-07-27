@@ -43,9 +43,13 @@ class SkipEnv(gym.Wrapper):
 
     def step(self, action):
         total_reward = 0
-        (state, reward, done, info) = (None, 0, False, None)
+        (max_state, reward, done, info) = (None, 0, False, None)
         for i in range(self.skip):
             (state, reward, done, info) = self.env.step(action)
+            if max_state is None:
+                max_state = state
+            else:
+                max_state = np.maximum(max_state, state)
             total_reward += reward
             if done:
                 break

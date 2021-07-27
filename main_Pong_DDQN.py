@@ -11,7 +11,7 @@ Pong-v0, except using ddqn
 """
 
 # create the buffer
-replay_buffer = ReplayBuffer(capacity=100000)
+replay_buffer = ReplayBuffer(capacity=80000)
 
 # create agent
 agent = DDQNAgent(replay_buffer,
@@ -21,7 +21,7 @@ agent = DDQNAgent(replay_buffer,
                   epsilon=0.5,
                   batch_size=32,
                   learning_rate=0.0005,
-                  update_interval=10000,
+                  update_interval=8000,
                   gamma=0.995,
                   optimizer="adam",
                   modify_env=True)

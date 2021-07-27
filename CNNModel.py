@@ -34,7 +34,8 @@ class CNNModel(nn.Module):
         convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h)))
         linear_input_size = convw * convh * 32
         self.fc1 = nn.Linear(linear_input_size, 1024)
-        self.fc2 = nn.Linear(1024, outputs)
+        self.fc2 = nn.Linear(1024, 512)
+        self.fc3 = nn.Linear(512, outputs)
 
         device = "cpu"
         if torch.cuda.is_available():
@@ -61,6 +62,7 @@ class CNNModel(nn.Module):
         x = F.relu(self.bn3(self.conv3(x)))
         x = F.relu(self.fc1(x.view(x.size(0), -1)))
         x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
         return x
 
     def load(self, buffer):
