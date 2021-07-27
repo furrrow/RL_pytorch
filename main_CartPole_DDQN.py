@@ -10,17 +10,17 @@ replay_buffer = ReplayBuffer(capacity=500000)
 # try Pong-v0 later
 
 # create agent
-agent = DQNAgent(replay_buffer,
-                 env_name="CartPole-v1",
-                 model_name="simple",
-                 n_episodes=300,
-                 epsilon=0.5,
-                 batch_size=64,
-                 learning_rate=0.0005,
-                 update_interval=150,
-                 gamma=1,
-                 optimizer="adam",
-                 modify_env=False)
+agent = DDQNAgent(replay_buffer,
+                  env_name="CartPole-v1",
+                  model_name="simple",
+                  n_episodes=300,
+                  epsilon=0.5,
+                  batch_size=64,
+                  learning_rate=0.0005,
+                  update_interval=150,
+                  gamma=1,
+                  optimizer="adam",
+                  modify_env=False)
 agent.populate_buffer()
 record, rolling_avg, loss_record = agent.train(policy_name="egreedyexp")
 x = np.arange(len(record))
