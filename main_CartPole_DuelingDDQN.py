@@ -1,6 +1,7 @@
 from ReplayBuffer import ReplayBuffer
 from DQNAgent import DQNAgent
 from DDQNAgent import DDQNAgent
+from DuelingDDQNAgent import DuelingDDQNAgent
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -10,17 +11,18 @@ replay_buffer = ReplayBuffer(capacity=500000)
 # try Pong-v0 later
 
 # create agent
-agent = DDQNAgent(replay_buffer,
-                  env_name="CartPole-v1",
-                  model_name="simple",
-                  n_episodes=300,
-                  epsilon=0.5,
-                  batch_size=64,
-                  learning_rate=0.0005,
-                  update_interval=150,
-                  gamma=1,
-                  optimizer="adam",
-                  modify_env=False)
+agent = DuelingDDQNAgent(replay_buffer,
+                         env_name="CartPole-v1",
+                         model_name="duelsimple",
+                         n_episodes=500,
+                         epsilon=0.5,
+                         batch_size=64,
+                         learning_rate=0.0005,
+                         update_interval=50,
+                         gamma=1,
+                         optimizer="adam",
+                         modify_env=False,
+                         tau=0.1)
 agent.populate_buffer()
 record, rolling_avg, loss_record = agent.train(policy_name="egreedyexp")
 x = np.arange(len(record))

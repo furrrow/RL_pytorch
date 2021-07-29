@@ -175,8 +175,8 @@ class DDQNAgent:
                 if (count + total_count) % self.update_interval == 0:
                     self.update_target_network()
                     print("updated target network!")
-                # self.optimize_jim()
-                self.optimize_miguel()
+                self.optimize_jim()
+                # self.optimize_miguel()
             self.render = False  # reset render flag
             total_count += count
             self.reward_record.append(tmp_reward)
@@ -184,8 +184,8 @@ class DDQNAgent:
             self.rolling_average.append(rolling_average)
             avg_loss = np.average(self.epoch_loss)
             self.loss_record.append(avg_loss)
-            if episode % 5 == 0:
-                print("episode", episode, "reward", tmp_reward, "avg", round(rolling_average, 3),
+            if episode % 1 == 0:
+                print("episode", episode, "reward", round(tmp_reward, 3), "avg", round(rolling_average, 3),
                       "loss", round(avg_loss, 3), "step count", count)
             if episode % 10 == 0:
                 self.render = True  # render the next episode
@@ -195,9 +195,10 @@ class DDQNAgent:
                     print("!!! exceeded benchmark at epoch", episode)
                     print("!!! exceeded benchmark, last 100 episode avg reward:", round(rolling_average, 3))
                     self.solved = True
+                    self.n_episodes = episode + 10  # terminate in 10 episodes
             if tmp_reward > self.best_score:
                 self.best_score = tmp_reward
-                print("episode", episode, "new best score", self.best_score, "rolling avg", round(rolling_average, 3))
+                print("episode", episode, "new best score", round(self.best_score, 3), "rolling avg", round(rolling_average, 3))
 
 
         return self.reward_record, self.rolling_average, self.loss_record
