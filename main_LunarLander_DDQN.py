@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # create the buffer
-replay_buffer = ReplayBuffer(capacity=500000)
+replay_buffer = ReplayBuffer(capacity=50000)
 # env_name="CartPole-v1 can use SimpleModel
 # try Pong-v0 later
 
@@ -21,7 +21,7 @@ agent = DDQNAgent(replay_buffer,
                   gamma=0.9995,
                   optimizer="adam",
                   modify_env=False)
-agent.populate_buffer()
+agent.populate_buffer(factor=0.25)
 record, rolling_avg, loss_record = agent.train(policy_name="linear")
 x = np.arange(len(record))
 # print(record)

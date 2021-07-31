@@ -115,8 +115,8 @@ class DDQNAgent:
                                   self.online_model.parameters()):
             target.data.copy_(online.data)
 
-    def populate_buffer(self):
-        initial_size = int(self.buffer.capacity * 0.1)
+    def populate_buffer(self, factor=0.1):
+        initial_size = int(self.buffer.capacity * factor)
 
         while self.buffer.length() < initial_size:
             state = self.env.reset()

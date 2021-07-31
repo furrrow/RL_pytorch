@@ -12,25 +12,25 @@ Pong-v0, dueling ddqn
 """
 
 # create the buffer
-replay_buffer = ReplayBuffer(capacity=80000)
+replay_buffer = ReplayBuffer(capacity=50000)
 
 # create agent
 agent = DuelingDDQNAgent(replay_buffer,
                          # env_name="Pong-v0",
                          env_name="PongNoFrameskip-v4",
                          model_name="duelcnn",  # "online",
-                         n_episodes=1000,
+                         n_episodes=2000,
                          epsilon=0.5,
                          batch_size=32,
-                         learning_rate=0.001,
-                         update_interval=10000,
+                         learning_rate=0.0005,
+                         update_interval=5000,
                          gamma=0.9995,
-                         optimizer="adam",
+                         optimizer="rmsprop",
                          modify_env=True,
                          tau=0.1)
 
-agent.populate_buffer()
-record, rolling_avg, loss_record = agent.train(policy_name="egreedyexp")
+agent.populate_buffer(factor=0.33)
+record, rolling_avg, loss_record = agent.train(policy_name="linear")
 x = np.arange(len(record))
 # print(record)
 
