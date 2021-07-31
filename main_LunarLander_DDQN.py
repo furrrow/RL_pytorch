@@ -16,13 +16,13 @@ agent = DDQNAgent(replay_buffer,
                   n_episodes=1000,
                   epsilon=0.5,
                   batch_size=64,
-                  learning_rate=0.001,
-                  update_interval=1000,
-                  gamma=0.995,
+                  learning_rate=0.0005,
+                  update_interval=5000,
+                  gamma=0.9995,
                   optimizer="adam",
                   modify_env=False)
 agent.populate_buffer()
-record, rolling_avg, loss_record = agent.train(policy_name="egreedyexp")
+record, rolling_avg, loss_record = agent.train(policy_name="linear")
 x = np.arange(len(record))
 # print(record)
 
@@ -31,5 +31,5 @@ rewards_plot.plot(x, record, label="rewards")
 rewards_plot.plot(x, rolling_avg, label="rolling_avg")
 rewards_plot.plot(x, loss_record, label="loss")
 rewards_plot.legend()
-plt.savefig('LunarLander_DuelDDQN.png')
+plt.savefig('LunarLander_DDQN.png')
 plt.show()

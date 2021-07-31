@@ -20,15 +20,15 @@ replay_buffer = ReplayBuffer(capacity=70000)
 
 # create agent
 agent = DQNAgent(replay_buffer,
-                 env_name="Pong-v0",
+                 env_name="PongNoFrameskip-v4",
                  model_name="cnn",
                  n_episodes=2000,
                  epsilon=0.5,
                  batch_size=32,
                  learning_rate=0.0001,
-                 update_interval=8000,
-                 gamma=0.995,
-                 optimizer="adam",
+                 update_interval=1000,
+                 gamma=0.99,
+                 optimizer="rmsprop",
                  modify_env=True,
                  render=True)
 
@@ -42,6 +42,6 @@ rewards_plot.plot(x, record, label="rewards")
 rewards_plot.plot(x, rolling_avg, label="rolling_avg")
 rewards_plot.plot(x, loss_record, label="loss")
 rewards_plot.legend()
-plt.savefig('LunarLander_DuelDDQN.png')
+plt.savefig('Pong_main.png')
 plt.show()
 

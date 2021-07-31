@@ -18,12 +18,12 @@ class CNNModel(nn.Module):
         c = input_shape[0]
         h = input_shape[1]
         w = input_shape[2]
-        self.conv1 = nn.Conv2d(in_channels=c, out_channels=32, kernel_size=5, stride=2)
+        self.conv1 = nn.Conv2d(in_channels=c, out_channels=32, kernel_size=8, stride=4)
         self.bn1 = nn.BatchNorm2d(32)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=5, stride=2)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.bn2 = nn.BatchNorm2d(64)
-        self.conv3 = nn.Conv2d(64, 32, kernel_size=5, stride=2)
-        self.bn3 = nn.BatchNorm2d(32)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+        self.bn3 = nn.BatchNorm2d(64)
 
         # Number of Linear input connections depends on output of conv2d layers
         # and therefore the input image size, so compute it.
@@ -32,10 +32,9 @@ class CNNModel(nn.Module):
 
         convw = conv2d_size_out(conv2d_size_out(conv2d_size_out(w)))
         convh = conv2d_size_out(conv2d_size_out(conv2d_size_out(h)))
-        linear_input_size = convw * convh * 32
-        self.fc1 = nn.Linear(linear_input_size, 1024)
-        self.fc2 = nn.Linear(1024, 512)
-        self.fc3 = nn.Linear(512, outputs)
+        linear_input_size = convw * convh * 64
+        self.fc1 = nn.Linear(linear_input_size, 256)
+        self.fc2 = nn.Linear(256, outputs)
 
         device = "cpu"
         if torch.cuda.is_available():
@@ -62,7 +61,6 @@ class CNNModel(nn.Module):
         x = F.relu(self.bn3(self.conv3(x)))
         x = F.relu(self.fc1(x.view(x.size(0), -1)))
         x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
         return x
 
     def load(self, buffer):

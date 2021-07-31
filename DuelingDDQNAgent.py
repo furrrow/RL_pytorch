@@ -3,14 +3,16 @@ import torch.optim as optim
 import gym
 import numpy as np
 
-import utils
-# import test_utils as utils
+# import utils
+import test_utils as utils
 from SimpleModel import SimpleModel
 from DuelingSimpleModel import DuelingSimpleModel
 from CNNModel import CNNModel
 from DuelingCNNModel import DuelingCNNModel
+from TaborDQNetwork import DuelingDeepQNetwork
 from EGreedyStrategy import EGreedyStrategy
 from EGreedyExpStrategy import EGreedyExpStrategy
+from LinearDecayStrategy import LinearDecayStrategy
 from RandomStrategy import RandomStrategy
 
 
@@ -61,6 +63,13 @@ class DuelingDDQNAgent:
             self.input_shape = (c, w, h)
             self.online_model = DuelingCNNModel(self.input_shape, self.n_action)
             self.target_model = DuelingCNNModel(self.input_shape, self.n_action)
+            full_shape = (batch_size, c, w, h)
+            self.online_model.print_model(input_size=full_shape)
+        elif model_name == "online":
+            (c, w, h) = self.env.observation_space.shape
+            self.input_shape = (c, w, h)  # lr, n_actions, name, input_dims, chkpt_dir
+            self.online_model = DuelingDeepQNetwork(learning_rate, self.n_action, "helpddqn", self.input_shape, 'tmp/dqn')
+            self.target_model = DuelingDeepQNetwork(learning_rate, self.n_action, "helpddqn", self.input_shape, 'tmp/dqn')
             full_shape = (batch_size, c, w, h)
             self.online_model.print_model(input_size=full_shape)
         self.reward_record = []
@@ -159,6 +168,8 @@ class DuelingDDQNAgent:
             policy = EGreedyStrategy(epsilon=self.epsilon)
         elif policy_name == "egreedyexp":
             policy = EGreedyExpStrategy(init_epsilon=1.0, min_epsilon=0.1, decay_steps=20000)
+        elif policy_name == "linear":
+            policy = LinearDecayStrategy(init_epsilon=1.0, min_epsilon=0.05, plateu_step=500)
         elif policy_name == "random":
             policy = RandomStrategy()
         else:
@@ -171,8 +182,8 @@ class DuelingDDQNAgent:
             self.epoch_loss = []
             while not terminal:
                 # render if needed
-                if self.render:
-                    self.env.render()
+                # if self.render:
+                #     self.env.render()
                 # select action
                 action = policy.select_action(self.online_model, state)
                 (next_state, reward, done, info) = self.env.step(action)
@@ -200,15 +211,17 @@ class DuelingDDQNAgent:
             rolling_average = np.average(self.reward_record[-100:])
             self.rolling_average.append(rolling_average)
             avg_loss = np.average(self.epoch_loss)
+            if policy_name == "linear":
+                policy._epsilon_update()
             self.loss_record.append(avg_loss)
             if episode % 1 == 0:
                 print("episode", episode, "reward", round(tmp_reward, 3), "avg", round(rolling_average, 3),
-                      "loss", round(avg_loss, 3), "step count", count)
+                      "loss", round(avg_loss, 3), "epsilon", round(policy.epsilon, 3), "step count", count)
             if episode % 30 == 0:
                 self.render = True  # render the next episode
 
             if not self.solved:
-                if rolling_average > 19:
+                if rolling_average > 200:
                     print("!!! exceeded benchmark at epoch", episode)
                     print("!!! exceeded benchmark, last 100 episode avg reward:", round(rolling_average, 3))
                     self.solved = True

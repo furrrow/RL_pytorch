@@ -81,5 +81,5 @@ if __name__ == "__main__":
     rewards_plot.plot(x, rolling_avg, label="rolling_avg")
     rewards_plot.plot(x, loss_record, label="loss")
     rewards_plot.legend()
-    plt.savefig('LunarLander_DuelDDQN.png')
+    plt.savefig('Pong_DuelDDQN.png')
     plt.show()

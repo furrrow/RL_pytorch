@@ -9,6 +9,7 @@ from SimpleModel import SimpleModel
 from CNNModel import CNNModel
 from EGreedyStrategy import EGreedyStrategy
 from EGreedyExpStrategy import EGreedyExpStrategy
+from LinearDecayStrategy import LinearDecayStrategy
 from RandomStrategy import RandomStrategy
 
 
@@ -125,12 +126,10 @@ class DDQNAgent:
             while not terminal:
                 action = self.env.action_space.sample()
                 (next_state, reward, done, info) = self.env.step(action)
-                if ("TimeLimit" in info):
-                    print(info)
-                    print("terminating episode...")
-                    done = False
-                    terminal = True
-                self.buffer.save(state, action, next_state, reward, done)
+                # handle cases when it reaches a time limit but not actually terminal
+                is_truncated = 'TimeLimit.truncated' in info and info['TimeLimit.truncated']
+                is_failure = done and not is_truncated
+                self.buffer.save(state, action, next_state, reward, is_failure)
                 terminal = done
                 state = next_state
                 tmp_reward += reward
@@ -142,6 +141,8 @@ class DDQNAgent:
             policy = EGreedyStrategy(epsilon=self.epsilon)
         elif policy_name == "egreedyexp":
             policy = EGreedyExpStrategy(init_epsilon=1.0, min_epsilon=0.1, decay_steps=20000)
+        elif policy_name == "linear":
+            policy = LinearDecayStrategy(init_epsilon=1.0, min_epsilon=0.1, plateu_step=750)
         elif policy_name == "random":
             policy = RandomStrategy()
         else:
@@ -154,24 +155,21 @@ class DDQNAgent:
             self.epoch_loss = []
             while not terminal:
                 # render if needed
-                if self.render:
-                    self.env.render()
+                # if self.render:
+                #     self.env.render()
                 # select action
                 action = policy.select_action(self.online_model, state)
                 (next_state, reward, done, info) = self.env.step(action)
                 # handle cases when it reaches a time limit but not actually terminal
-                if ("TimeLimit" in info):
-                    print(info)
-                    print("terminating episode...")
-                    done = False
-                    terminal = True
-                self.buffer.save(state, action, next_state, reward, done)
+                is_truncated = 'TimeLimit.truncated' in info and info['TimeLimit.truncated']
+                is_failure = done and not is_truncated
+                self.buffer.save(state, action, next_state, reward, is_failure)
                 terminal = done
                 state = next_state
                 tmp_reward += reward
                 count += 1
 
-                # update target network periodically
+                # update target network periodically, linearly increase update interval
                 if (count + total_count) % self.update_interval == 0:
                     self.update_target_network()
                     print("updated target network!")
@@ -183,19 +181,21 @@ class DDQNAgent:
             rolling_average = np.average(self.reward_record[-100:])
             self.rolling_average.append(rolling_average)
             avg_loss = np.average(self.epoch_loss)
+            if policy_name == "linear":  # update epsilon at every epoch instead of step
+                policy._epsilon_update()
             self.loss_record.append(avg_loss)
             if episode % 1 == 0:
                 print("episode", episode, "reward", round(tmp_reward, 3), "avg", round(rolling_average, 3),
-                      "loss", round(avg_loss, 3), "step count", count)
-            if episode % 10 == 0:
+                      "loss", round(avg_loss, 3), "epsilon", round(policy.epsilon, 3), "step count", count)
+            if episode % 30 == 0:
                 self.render = True  # render the next episode
 
             if not self.solved:
-                if rolling_average > 2.5:
+                if rolling_average > 19:
                     print("!!! exceeded benchmark at epoch", episode)
                     print("!!! exceeded benchmark, last 100 episode avg reward:", round(rolling_average, 3))
                     self.solved = True
-                    self.n_episodes = episode + 10  # terminate in 10 episodes
+                    break  # terminate
             if tmp_reward > self.best_score:
                 self.best_score = tmp_reward
                 print("episode", episode, "new best score", round(self.best_score, 3), "rolling avg", round(rolling_average, 3))
