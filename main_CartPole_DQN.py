@@ -1,11 +1,10 @@
-from ReplayBuffer import ReplayBuffer
-from DQNAgent import DQNAgent
-from DDQNAgent import DDQNAgent
+from DequeReplayBuffer import DequeReplayBuffer
+from agents.DQNAgent import DQNAgent
 import numpy as np
 import matplotlib.pyplot as plt
 
 # create the buffer
-replay_buffer = ReplayBuffer(capacity=500000)
+replay_buffer = DequeReplayBuffer(capacity=500000)
 # env_name="CartPole-v1 can use SimpleModel
 # try Pong-v0 later
 
@@ -31,5 +30,7 @@ rewards_plot.plot(x, record, label="rewards")
 rewards_plot.plot(x, rolling_avg, label="rolling_avg")
 rewards_plot.plot(x, loss_record, label="loss")
 rewards_plot.legend()
-plt.savefig('Pong_DuelDDQN.png')
+plt.savefig('train_results.png')
 plt.show()
+
+#%%

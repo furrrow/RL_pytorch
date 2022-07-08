@@ -1,6 +1,7 @@
 import numpy as np
 EPS = 1e-6
 
+
 class PrioritizedReplayBuffer:
     def __init__(self,
                  max_samples=10000,

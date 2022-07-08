@@ -1,11 +1,12 @@
-from ReplayBuffer import ReplayBuffer
-from DQNAgent import DQNAgent
-from DDQNAgent import DDQNAgent
+from NumpyReplayBuffer import NumpyReplayBuffer
+from agents.DDQNAgent import DDQNAgent
 import numpy as np
 import matplotlib.pyplot as plt
 
 # create the buffer
-replay_buffer = ReplayBuffer(capacity=50000)
+# replay_buffer = ReplayBuffer(capacity=50000)
+replay_buffer = NumpyReplayBuffer(max_size=10000,
+                                  batch_size=64)
 # env_name="CartPole-v1 can use SimpleModel
 # try Pong-v0 later
 
@@ -13,7 +14,7 @@ replay_buffer = ReplayBuffer(capacity=50000)
 agent = DDQNAgent(replay_buffer,
                   env_name="LunarLander-v2",
                   model_name="simple",
-                  n_episodes=1000,
+                  n_episodes=1500,
                   epsilon=0.5,
                   batch_size=64,
                   learning_rate=0.0005,

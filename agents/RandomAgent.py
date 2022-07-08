@@ -1,21 +1,7 @@
 import matplotlib.pyplot as plt
-import gym
 import numpy as np
-from gym.envs import toy_text
-import torch
-import torchvision
-from torchvision import transforms
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-import os
-from SimpleModel import SimpleModel
-from CNNModel import CNNModel
-from EGreedyStrategy import EGreedyStrategy
-from EGreedyExpStrategy import EGreedyExpStrategy
-from RandomStrategy import RandomStrategy
-from DQNAgent import DQNAgent
-from ReplayBuffer import ReplayBuffer
+from agents.DQNAgent import DQNAgent
+from DequeReplayBuffer import ReplayBuffer
 
 if __name__ == "__main__":
     #episodes = 1500

@@ -1,7 +1,5 @@
-from ReplayBuffer import ReplayBuffer
-from DQNAgent import DQNAgent
-from DDQNAgent import DDQNAgent
-from DuelingDDQNAgent import DuelingDDQNAgent
+from DequeReplayBuffer import ReplayBuffer
+from agents.DuelingDDQNAgent import DuelingDDQNAgent
 import numpy as np
 import matplotlib.pyplot as plt
 

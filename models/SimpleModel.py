@@ -57,6 +57,19 @@ class SimpleModel(nn.Module):
         is_terminals = torch.from_numpy(is_terminals).float().to(self.device)
         return states, actions, new_states, rewards, is_terminals
 
+    def numpy_load(self, experiences):
+        states, actions, new_states, rewards, is_terminals = experiences
+        states = torch.from_numpy(states).float().to(self.device)
+        actions = torch.from_numpy(actions).long().to(self.device)
+        new_states = torch.from_numpy(new_states).float().to(self.device)
+        rewards = torch.from_numpy(rewards).float().to(self.device)
+        is_terminals = torch.from_numpy(is_terminals).float().to(self.device)
+        return states, actions, new_states, rewards, is_terminals
+
+    def numpy_float_to_device(self, variable):
+        variable = torch.from_numpy(variable).float().to(self.device)
+        return variable
+
     def print_model(self, input_size=None):
         if input_size is None:
             print(self)

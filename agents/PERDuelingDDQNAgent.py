@@ -5,15 +5,18 @@ import numpy as np
 
 # import utils
 import test_utils as utils
-from SimpleModel import SimpleModel
-from CNNModel import CNNModel
-from EGreedyStrategy import EGreedyStrategy
-from EGreedyExpStrategy import EGreedyExpStrategy
-from LinearDecayStrategy import LinearDecayStrategy
+from models.SimpleModel import SimpleModel
+from models.DuelingSimpleModel import DuelingSimpleModel
+from models.CNNModel import CNNModel
+from models.DuelingCNNModel import DuelingCNNModel
+from TaborDQNetwork import DuelingDeepQNetwork
+from policy.EGreedyStrategy import EGreedyStrategy
+from policy.EGreedyExpStrategy import EGreedyExpStrategy
+from policy.LinearDecayStrategy import LinearDecayStrategy
 from RandomStrategy import RandomStrategy
 
 
-class DDQNAgent:
+class PERDuelingDDQNAgent:
     def __init__(self,
                  buffer,
                  env_name,
@@ -26,7 +29,8 @@ class DDQNAgent:
                  gamma=0.9995,
                  optimizer="adam",
                  modify_env=False,
-                 render=False):
+                 render=False,
+                 tau=1.0):
         self.gamma = gamma
         self.buffer = buffer
         self.env_name = env_name
@@ -43,11 +47,31 @@ class DDQNAgent:
             self.online_model = SimpleModel(self.n_states, self.n_action)
             self.target_model = SimpleModel(self.n_states, self.n_action)
             self.online_model.print_model(input_size=(batch_size, self.n_states))
+        elif model_name == "duelsimple":
+            self.online_model = DuelingSimpleModel(self.n_states, self.n_action)
+            self.target_model = DuelingSimpleModel(self.n_states, self.n_action)
+            self.online_model.print_model(input_size=(batch_size, self.n_states))
         elif model_name == "cnn":
             (c, w, h) = self.env.observation_space.shape
             self.input_shape = (c, w, h)
             self.online_model = CNNModel(self.input_shape, self.n_action)
             self.target_model = CNNModel(self.input_shape, self.n_action)
+            full_shape = (batch_size, c, w, h)
+            self.online_model.print_model(input_size=full_shape)
+        elif model_name == "duelcnn":
+            (c, w, h) = self.env.observation_space.shape
+            self.input_shape = (c, w, h)
+            self.online_model = DuelingCNNModel(self.input_shape, self.n_action)
+            self.target_model = DuelingCNNModel(self.input_shape, self.n_action)
+            full_shape = (batch_size, c, w, h)
+            self.online_model.print_model(input_size=full_shape)
+        elif model_name == "online":
+            (c, w, h) = self.env.observation_space.shape
+            self.input_shape = (c, w, h)  # lr, n_actions, name, input_dims, chkpt_dir
+            self.online_model = DuelingDeepQNetwork(learning_rate, self.n_action, "helpddqn", self.input_shape,
+                                                    'tmp/dqn')
+            self.target_model = DuelingDeepQNetwork(learning_rate, self.n_action, "helpddqn", self.input_shape,
+                                                    'tmp/dqn')
             full_shape = (batch_size, c, w, h)
             self.online_model.print_model(input_size=full_shape)
         self.reward_record = []
@@ -62,6 +86,7 @@ class DDQNAgent:
         self.update_interval = update_interval
         self.solved = False
         self.render = render
+        self.tau = tau
 
         if optimizer == "adam":
             self.optimizer = optim.Adam(self.online_model.parameters(), lr=learning_rate)
@@ -69,29 +94,44 @@ class DDQNAgent:
             self.optimizer = optim.RMSprop(self.online_model.parameters(), lr=learning_rate)
 
     def optimize_miguel(self):
-        transitions = self.buffer.sample(self.batch_size)
-        (states, actions, next_states, rewards, is_terminals) = self.online_model.load(transitions)
-        # states, actions, rewards, next_states, is_terminals = experiences
-        # batch_size = len(is_terminals)
+        # transitions = self.buffer.sample(self.batch_size)
+        # (states, actions, next_states, rewards, is_terminals) = self.online_model.load(transitions)
+        experiences = self.buffer.sample()
+        idxs, weights, samples = experiences
+        experiences = self.online_model.numpy_load(samples)
+        experiences = (idxs, weights) + (experiences,)
 
-        # argmax_a_q_sp = self.target_model(next_states).max(1)[1]
+        idxs, weights, \
+        (states, actions, rewards, next_states, is_terminals) = experiences
+        weights = self.online_model.numpy_float_to_device(weights)
+        batch_size = len(is_terminals)
+
+        next_states = next_states.reshape(self.batch_size, -1, 84, 84)
+        states = states.reshape(self.batch_size, -1, 84, 84)
         argmax_a_q_sp = self.online_model(next_states).max(1)[1]
         q_sp = self.target_model(next_states).detach()
-        max_a_q_sp = q_sp[np.arange(self.batch_size), argmax_a_q_sp].unsqueeze(1)  # (batch_size, 1)
-        target_q_sa = rewards.unsqueeze(1) + (self.gamma * max_a_q_sp * (1 - is_terminals).unsqueeze(1))
-        q_sa = self.online_model(states).gather(1, actions.unsqueeze(1))
+        max_a_q_sp = q_sp[
+            np.arange(batch_size), argmax_a_q_sp].unsqueeze(1)
+        target_q_sa = rewards + (self.gamma * max_a_q_sp * (1 - is_terminals))
+        q_sa = self.online_model(states).gather(1, actions)
 
         td_error = q_sa - target_q_sa
-        value_loss = td_error.pow(2).mul(0.5).mean()
+        # value_loss = (weights * td_error).pow(2).mul(0.5).mean()
+        criterion = torch.nn.SmoothL1Loss()
+        value_loss = criterion(q_sa, target_q_sa)
         self.optimizer.zero_grad()
         value_loss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.online_model.parameters(), self.max_gradient_norm)
+        # torch.nn.utils.clip_grad_norm_(self.online_model.parameters(),
+        #                                self.max_gradient_norm)
         self.optimizer.step()
+
+        priorities = np.abs(td_error.detach().cpu().numpy())
+        self.buffer.update(idxs, priorities)
         self.epoch_loss.append(value_loss.data.cpu().numpy().copy())
 
     def optimize_jim(self):
         transitions = self.buffer.sample(self.batch_size)
-        (states, actions, new_states, rewards, is_terminals) = self.online_model.load(transitions)
+        (states, actions, new_states, rewards, is_terminals) = self.online_model.numpy_load(transitions)
         continue_mask = 1 - is_terminals  # (batch_size)
         q_next_argmax = self.online_model(new_states).max(1)[1]  # (batch_size)
         q_next = self.target_model(new_states).detach()  # gradient does NOT involve the target
@@ -106,19 +146,23 @@ class DDQNAgent:
         # optimize
         self.optimizer.zero_grad()
         loss.backward()
-        for param in self.online_model.parameters():
-            param.grad.data.clamp_(-1, 1)
+        # for param in self.online_model.parameters():
+        #     param.grad.data.clamp_(-1, 1)
         self.optimizer.step()
 
-    def update_target_network(self):
+    def update_network(self, tau=None):
+        tau = self.tau if tau is None else tau
         for target, online in zip(self.target_model.parameters(),
                                   self.online_model.parameters()):
-            target.data.copy_(online.data)
+            target_ratio = (1.0 - self.tau) * target.data
+            online_ratio = self.tau * online.data
+            mixed_weights = target_ratio + online_ratio
+            target.data.copy_(mixed_weights)
 
     def populate_buffer(self, factor=0.1):
-        initial_size = int(self.buffer.capacity * factor)
+        initial_size = int(self.buffer.max_samples * factor)
 
-        while self.buffer.length() < initial_size:
+        while self.buffer.n_entries < initial_size:
             state = self.env.reset()
             terminal = False
             tmp_reward = 0
@@ -129,11 +173,11 @@ class DDQNAgent:
                 # handle cases when it reaches a time limit but not actually terminal
                 is_truncated = 'TimeLimit.truncated' in info and info['TimeLimit.truncated']
                 is_failure = done and not is_truncated
-                self.buffer.save(state, action, next_state, reward, is_failure)
+                self.buffer.store((state, action, reward, next_state, float(is_failure)))
                 terminal = done
                 state = next_state
                 tmp_reward += reward
-        print(self.buffer.length(), "entries saved to ReplayBuffer")
+        print(self.buffer.n_entries, "entries saved to ReplayBuffer")
 
     def train(self, policy_name="egreedy"):
         total_count = 0
@@ -142,7 +186,7 @@ class DDQNAgent:
         elif policy_name == "egreedyexp":
             policy = EGreedyExpStrategy(init_epsilon=1.0, min_epsilon=0.1, decay_steps=20000)
         elif policy_name == "linear":
-            policy = LinearDecayStrategy(init_epsilon=1.0, min_epsilon=0.1, plateu_step=750)
+            policy = LinearDecayStrategy(init_epsilon=1.0, min_epsilon=0.1, plateu_step=200)
         elif policy_name == "random":
             policy = RandomStrategy()
         else:
@@ -155,15 +199,18 @@ class DDQNAgent:
             self.epoch_loss = []
             while not terminal:
                 # render if needed
-                # if self.render:
-                #     self.env.render()
+                if self.render:
+                    self.env.render()
                 # select action
                 action = policy.select_action(self.online_model, state)
                 (next_state, reward, done, info) = self.env.step(action)
                 # handle cases when it reaches a time limit but not actually terminal
                 is_truncated = 'TimeLimit.truncated' in info and info['TimeLimit.truncated']
+                if is_truncated:
+                    print("info", info)
+                    print("done?", done)
                 is_failure = done and not is_truncated
-                self.buffer.save(state, action, next_state, reward, is_failure)
+                self.buffer.store((state, action, reward, next_state, float(is_failure)))
                 terminal = done
                 state = next_state
                 tmp_reward += reward
@@ -171,10 +218,10 @@ class DDQNAgent:
 
                 # update target network periodically, linearly increase update interval
                 if (count + total_count) % self.update_interval == 0:
-                    self.update_target_network()
+                    self.update_network()
                     print("updated target network!")
-                self.optimize_jim()
-                # self.optimize_miguel()
+                # self.optimize_jim()
+                self.optimize_miguel()
             self.render = False  # reset render flag
             total_count += count
             self.reward_record.append(tmp_reward)
@@ -186,19 +233,19 @@ class DDQNAgent:
             self.loss_record.append(avg_loss)
             if episode % 1 == 0:
                 print("episode", episode, "reward", round(tmp_reward, 3), "avg", round(rolling_average, 3),
-                      "loss", round(avg_loss, 3), "epsilon", round(policy.epsilon, 3), "step count", count)
-            if episode % 30 == 0:
+                      "loss", round(avg_loss, 5), "epsilon", round(policy.epsilon, 3), "step count", count)
+            if episode % 10 == 0:
                 self.render = True  # render the next episode
 
             if not self.solved:
-                if rolling_average > 19:
+                if rolling_average > 20:
                     print("!!! exceeded benchmark at epoch", episode)
                     print("!!! exceeded benchmark, last 100 episode avg reward:", round(rolling_average, 3))
                     self.solved = True
                     break  # terminate
             if tmp_reward > self.best_score:
                 self.best_score = tmp_reward
-                print("episode", episode, "new best score", round(self.best_score, 3), "rolling avg", round(rolling_average, 3))
-
+                print("episode", episode, "new best score", round(self.best_score, 3), "rolling avg",
+                      round(rolling_average, 3))
 
         return self.reward_record, self.rolling_average, self.loss_record

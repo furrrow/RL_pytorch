@@ -1,9 +1,5 @@
-from ReplayBuffer import ReplayBuffer
 from PrioritizedReplayBuffer import PrioritizedReplayBuffer
-from DQNAgent import DQNAgent
-from DDQNAgent import DDQNAgent
-from DuelingDDQNAgent import DuelingDDQNAgent
-from PERDuelingDDQNAgent import PERDuelingDDQNAgent
+from agents.PERDuelingDDQNAgent import PERDuelingDDQNAgent
 import numpy as np
 import matplotlib.pyplot as plt
 
