@@ -1,9 +1,26 @@
-from abc import ABC
-
 from PIL import Image, ImageOps
-import gym
+import gymnasium as gym
 import numpy as np
-import matplotlib.pyplot as plt
+import os
+import yaml
+
+
+def read_config_file(config_file):
+    if config_file is None:
+        print("config file is None, exiting...")
+        exit()
+    if os.path.isfile(config_file):
+        print(f"loading configuration file {config_file}")
+    else:
+        print(f"error, config file {config_file} not found, exiting...")
+        exit()
+    config = read_yaml(config_file)
+    return config
+
+
+def read_yaml(file_path):
+    with open(file_path, "r") as f:
+        return yaml.safe_load(f)
 
 
 def render_env(env, policy, gif_name):

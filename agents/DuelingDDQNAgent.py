@@ -1,6 +1,6 @@
 import torch
 import torch.optim as optim
-import gym
+import gymnasium as gym
 import numpy as np
 
 # import utils
@@ -9,7 +9,6 @@ from models.SimpleModel import SimpleModel
 from models.DuelingSimpleModel import DuelingSimpleModel
 from models.CNNModel import CNNModel
 from models.DuelingCNNModel import DuelingCNNModel
-from TaborDQNetwork import DuelingDeepQNetwork
 from policy.EGreedyStrategy import EGreedyStrategy
 from policy.EGreedyExpStrategy import EGreedyExpStrategy
 from policy.LinearDecayStrategy import LinearDecayStrategy

@@ -1,4 +1,4 @@
-from NumpyReplayBuffer import NumpyReplayBuffer
+from replay_buffer import NumpyReplayBuffer
 from agents.DDQNAgent import DDQNAgent
 import numpy as np
 import matplotlib.pyplot as plt

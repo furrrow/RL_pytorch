@@ -1,4 +1,4 @@
-from DequeReplayBuffer import DequeReplayBuffer
+from replay_buffer import DequeReplayBuffer
 from agents.DQNAgent import DQNAgent
 import numpy as np
 import matplotlib.pyplot as plt

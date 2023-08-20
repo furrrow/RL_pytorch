@@ -1,4 +1,4 @@
-from PrioritizedReplayBuffer import PrioritizedReplayBuffer
+from replay_buffer import PrioritizedReplayBuffer
 from agents.PERDuelingDDQNAgent import PERDuelingDDQNAgent
 import numpy as np
 import matplotlib.pyplot as plt

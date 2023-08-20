@@ -20,18 +20,17 @@ class EGreedyExpStrategy:
 
     def select_action(self, model, state):
         self.exploratory_action_taken = False
-        # print(self.epsilon)
         with torch.no_grad():
             q_values = model(state).detach().cpu().data.numpy().squeeze()
-
         if np.random.rand() > self.epsilon:
             action = np.argmax(q_values)
+            self.exploratory_action_taken = True
         else:
             action = np.random.randint(len(q_values))
 
         self._epsilon_update()
-        self.exploratory_action_taken = action != np.argmax(q_values)
         return action
+
 
 ## plot to see how this works
 # import matplotlib.pyplot as plt

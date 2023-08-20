@@ -1,0 +1,34 @@
+# gymnasium environment
+env_name: "CartPole-v1"
+
+# replay buffer
+buffer_type: "Deque" # Numpy
+replay_capacity: 500000
+replay_batch_size: 64
+replay_rank_based: false
+replay_alpha: 0.6
+replay_beta: 0.1
+replay_beta_rate: 0.99992
+
+# agent type
+agent_type: "DQN"
+
+# model parameters
+model_name: "simple"
+
+# training parameters
+episodes: 1000 # 450
+batch_size: 1024
+learning_rate: 0.0005
+epsilon: 0.0005
+update_interval: 10
+gamma: 0.9995
+torch_optimizer: "adam"
+rl_optimizer: "jim" # jim, miguel
+loss_criterion: "MSE" # SmoothL1, MSE
+modify_env: false
+render: false
+
+# training and testing
+policy_name: "egreedyexp"
+

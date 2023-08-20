@@ -1,4 +1,4 @@
-from DequeReplayBuffer import ReplayBuffer
+from replay_buffer import ReplayBuffer
 from agents.DuelingDDQNAgent import DuelingDDQNAgent
 import numpy as np
 import matplotlib.pyplot as plt
