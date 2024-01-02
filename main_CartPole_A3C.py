@@ -14,6 +14,10 @@ from replay_buffer import NumpyReplayBuffer
 heavily referencing:
 https://github.com/philtabor/Youtube-Code-Repository/blob/master/ReinforcementLearning/PolicyGradient/A3C/pytorch/a3c.py#L159
 https://github.com/mimoralea/gdrl/blob/master/notebooks/chapter_11/chapter-11.ipynb
+
+the code still has a hard time being trained properly, thus cannot rule out the possibility of a bug
+however, A3C has known to be brittle to hyperparameters.
+alternatively, I could use entirely different neural networks for both policy and value models (like miguel's notebook)
 """
 
 
@@ -219,7 +223,7 @@ if __name__ == '__main__':
     N_GAMES = 3000
     T_MAX = 5
     # n_workers = mp.cpu_count()-1
-    n_workers = 12
+    n_workers = 8
     global_actor_critic = ActorCritic(n_states, n_action, entropy_loss_weight)
     global_actor_critic.share_memory()
     optim = SharedAdam(global_actor_critic.parameters(), lr=LR, betas=(0.92, 0.999))

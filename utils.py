@@ -3,6 +3,7 @@ import gymnasium as gym
 import numpy as np
 import os
 import yaml
+from matplotlib import pyplot as plt
 
 
 def read_config_file(config_file):
@@ -21,6 +22,50 @@ def read_config_file(config_file):
 def read_yaml(file_path):
     with open(file_path, "r") as f:
         return yaml.safe_load(f)
+
+
+def plot_training_history(rewards_array: np.array, save: bool=False, filename="history.png"):
+    fig = plt.figure()
+    rolling_history = []
+    for t in range(len(rewards_array)):
+        subsection = rewards_array[:t+1]
+        rolling_history.append(np.average(subsection[-100:]))
+    plt.style.use('seaborn-v0_8')
+    plt.plot(rewards_array, alpha=0.5, label='rewards')
+    plt.plot(np.array(rolling_history), label='100 episode rolling avg')
+    plt.legend()
+    if save:
+        plt.savefig(filename)
+    plt.show()
+
+
+def plot_learning_curve(x, scores, epsilons, filename, lines=None):
+    fig = plt.figure()
+    ax = fig.add_subplot(111, label="1")
+    ax2 = fig.add_subplot(111, label="2", frame_on=False)
+
+    ax.plot(x, epsilons, color="C0")
+    ax.set_xlabel("Training Steps", color="C0")
+    ax.set_ylabel("Epsilon", color="C0")
+    ax.tick_params(axis='x', colors="C0")
+    ax.tick_params(axis='y', colors="C0")
+
+    N = len(scores)
+    running_avg = np.empty(N)
+    for t in range(N):
+        running_avg[t] = np.mean(scores[max(0, t - 20):(t + 1)])
+    ax2.scatter(x, running_avg, color="C1")
+    ax2.axes.get_xaxis().set_visible(False)
+    ax2.yaxis.tick_right()
+    ax2.set_ylabel('Score', color="C1")
+    ax2.yaxis.set_label_position('right')
+    ax2.tick_params(axis='y', colors="C1")
+
+    if lines is not None:
+        for line in lines:
+            plt.axvline(x=line)
+
+    plt.savefig(filename)
 
 
 def render_env(env, policy, gif_name):
