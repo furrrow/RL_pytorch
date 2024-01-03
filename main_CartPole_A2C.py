@@ -93,6 +93,7 @@ class A2CNet(nn.Module):
 
 
 class MultiprocessEnv(object):
+    # TODO: replace this multi-env with gymnasium's built-in vectorized envs!
     def __init__(self, env_name, n_workers):
         self.env_name = env_name
         self.n_workers = n_workers
