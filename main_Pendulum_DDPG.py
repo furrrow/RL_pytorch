@@ -132,9 +132,7 @@ class DDPG:
         self.target_policy_model = PNet(n_states, n_action, bounds)
         self.online_policy_model = PNet(n_states, n_action, bounds)
         self.value_optimizer = torch.optim.Adam(self.online_value_model.parameters(), lr=LR)
-        # self.value_optimizer = torch.optim.RMSprop(self.online_value_model.parameters(), lr=LR)
         self.policy_optimizer = torch.optim.Adam(self.online_policy_model.parameters(), lr=LR)
-        # self.policy_optimizer = torch.optim.RMSprop(self.online_policy_model.parameters(), lr=LR)
         self.env = gym.make(env_id)
         self.buffer = NumpyReplayBuffer(100000, batch_size)
         self.update_interval = update_interval
@@ -203,27 +201,27 @@ class DDPG:
 
     def populate_buffer(self, n_batches=5):
         min_samples = self.buffer.batch_size * n_batches
-        while len(self.buffer) <= min_samples:
+        while not len(self.buffer) > min_samples:
             state, info = self.env.reset()
             terminal, truncated = False, False
-            while not (terminal or truncated):
-                new_state, terminal, truncated = self.interaction_step(state, explore=True)
+            while not (terminal or truncated):  # don't forget to overwrite state!!
+                state, terminal, truncated = self.interaction_step(state, explore=True)
         print(f"{len(self.buffer)} samples populated to buffer")
 
     def train(self, N_GAMES):
         episode = 0
-        self.populate_buffer(10)
+        self.populate_buffer(5)
         while episode < N_GAMES:
             self.running_reward = 0
             self.running_timestep = 0
             state, info = self.env.reset()
             terminal, truncated = False, False
             while not (terminal or truncated):
-                new_state, terminal, truncated = self.interaction_step(state)
+                state, terminal, truncated = self.interaction_step(state, explore=False)
                 experiences = self.buffer.sample()
                 experiences = self.online_value_model.load(experiences)
                 self.optimize_model(experiences)
-                if self.running_timestep % self.update_interval:
+                if self.running_timestep % self.update_interval == 0:
                     self.update_networks()
             self.rewards_history = np.append(self.rewards_history, np.average(self.running_reward))
             print(f"ep: {episode}, t: {self.running_timestep}, reward: {self.running_reward:.2f}, \t"
@@ -238,7 +236,7 @@ if __name__ == '__main__':
     device = "cpu"
     print("using", device)
     BATCH_SIZE = 256
-    LR = 0.001
+    LR = 0.0003
     tau = 0.005
     gamma = 0.99
     env_id = "Pendulum-v1"

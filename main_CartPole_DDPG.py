@@ -13,6 +13,8 @@ from tqdm import tqdm
 heavily referencing:
 https://github.com/mimoralea/gdrl/blob/master/notebooks/chapter_12/chapter-12.ipynb
 
+DDPG works for pendulum, but does not work well for cart-pole
+- perhaps not well suited for an env with such a sparse discrete action space?
 
 """
 
@@ -28,25 +30,13 @@ class QVNet(nn.Module):
         self.entropies = []
         self.gamma = gamma
 
-        self.linear1 = nn.Linear(input_dim+n_actions, 128)
-        self.linear2 = nn.Linear(128, 64)
-        self.value_layer = nn.Linear(64, 1)
+        self.linear1 = nn.Linear(input_dim+1, 256)  # n_action not used due to discrete action
+        self.linear2 = nn.Linear(256, 256)
+        self.value_layer = nn.Linear(256, 1)
         self.device = torch.device(device)
         self.to(self.device)
 
-    def _format(self, state):
-        x = state
-        if not isinstance(x, torch.Tensor):
-            x = torch.tensor(x,
-                             device=self.device,
-                             dtype=torch.float32)
-            x = x.unsqueeze(0)
-        return x
-
     def forward(self, s, a):
-        s, a = self._format(s), self._format(a)
-        if len(a.shape) < len(s.shape):
-            a = a.unsqueeze(1)
         x = torch.cat((s, a), dim=1)
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
@@ -75,47 +65,31 @@ class PNet(nn.Module):
         self.entropies = []
         self.gamma = gamma
 
-        self.linear1 = nn.Linear(input_dim, 128)
-        self.linear2 = nn.Linear(128, 64)
-        self.policy_layer = nn.Linear(64, n_actions)
+        self.linear1 = nn.Linear(input_dim, 256)
+        self.linear2 = nn.Linear(256, 256)
+        self.policy_layer = nn.Linear(256, n_actions)
         self.device = torch.device(device)
         self.to(self.device)
 
-    # def rescale_function(self, input):
-    #     magnitude = input - (-1)  # tanh goes from -1 to 1
-    #     output = magnitude * (self.env_max - self.env_min) + self.env_min
-    #     return output
-
-    def _format(self, state):
-        x = state
-        if not isinstance(x, torch.Tensor):
-            x = torch.tensor(x,
-                             device=self.device,
-                             dtype=torch.float32)
-            x = x.unsqueeze(0)
-        return x
-
     def forward(self, x):
         # TODO: try sigmoid output function and modify rescale function?
-        x = self._format(x)
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
         pi = self.policy_layer(x)
-        # pi = F.tanh(self.policy_layer(x))
-        # pi = self.recale_function(pi)
         return pi
 
-    def choose_action(self, observation):
+    def choose_action_nograd(self, observation):
+        with torch.no_grad():
+            logits = self.forward(observation)
+            dist = Categorical(logits=logits)
+            action = dist.sample()
+        return action
+
+    def choose_action_gradient(self, observation):
         logits = self.forward(observation)
         dist = Categorical(logits=logits)
         action = dist.sample()
-        # log_pa = dist.log_prob(action).unsqueeze(-1)
-        # entropy = dist.entropy().unsqueeze(-1)
-        # if len(action) == 1:
-        #     action = action.item()
-        # else:
-        #     action = action.data.numpy()
-        return action
+        return action.unsqueeze(1)
 
 
 class DDPG:
@@ -126,12 +100,10 @@ class DDPG:
         self.online_value_model = QVNet(n_states, n_action)
         self.target_policy_model = PNet(n_states, n_action, bounds)
         self.online_policy_model = PNet(n_states, n_action, bounds)
-        # self.value_optimizer = torch.optim.Adam(self.online_value_model.parameters(), lr=LR)
-        self.value_optimizer = torch.optim.RMSprop(self.online_value_model.parameters(), lr=LR)
-        # self.policy_optimizer = torch.optim.Adam(self.online_policy_model.parameters(), lr=LR)
-        self.policy_optimizer = torch.optim.RMSprop(self.online_policy_model.parameters(), lr=LR)
+        self.value_optimizer = torch.optim.Adam(self.online_value_model.parameters(), lr=LR)
+        self.policy_optimizer = torch.optim.Adam(self.online_policy_model.parameters(), lr=LR)
         self.env = gym.make(env_id)
-        self.buffer = NumpyReplayBuffer(10000, batch_size)
+        self.buffer = NumpyReplayBuffer(100000, batch_size)
         self.update_interval = update_interval
         self.tau = tau
         self.gamma = gamma
@@ -149,7 +121,7 @@ class DDPG:
         batch_size = len(is_terminals)
 
         # value updates:
-        target_action = self.target_policy_model.choose_action(next_states)
+        target_action = self.target_policy_model.choose_action_gradient(next_states)
         max_a_q_sp = self.target_value_model(next_states, target_action)
         target_q_sa = rewards + self.gamma * max_a_q_sp * (1 - is_terminals)
         q_sa = self.online_value_model(states, actions)
@@ -159,22 +131,22 @@ class DDPG:
         value_loss = td_error.pow(2).mul(0.5).mean()
         self.value_optimizer.zero_grad()
         value_loss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.online_value_model.parameters(), 0.75)
+        torch.nn.utils.clip_grad_norm_(self.online_value_model.parameters(), float('inf'))
         self.value_optimizer.step()
 
         # policy updates:
-        online_action = self.online_policy_model.choose_action(states)
+        online_action = self.online_policy_model.choose_action_gradient(states)
         max_a_q_s = self.online_value_model(states, online_action)
         policy_loss = -max_a_q_s.mean()
         self.policy_optimizer.zero_grad()
         policy_loss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.online_policy_model.parameters(), 0.75)
+        torch.nn.utils.clip_grad_norm_(self.online_policy_model.parameters(), float('inf'))
         self.policy_optimizer.step()
 
     def interaction_step(self, state):
         # altering a little because cart-pole has discrete action space
-        with torch.no_grad():
-            action = self.online_policy_model.choose_action(state)
+        state = torch.Tensor(state)
+        action = self.online_policy_model.choose_action_nograd(state)
         new_state, reward, terminated, truncated, info = self.env.step(action.item())
         experience = (state, action, reward, new_state, int(terminated))
         self.buffer.store(experience)
@@ -203,23 +175,24 @@ class DDPG:
             state, info = self.env.reset()
             terminal, truncated = False, False
             while not (terminal or truncated):
-                new_state, terminal, truncated = self.interaction_step(state)
+                state, terminal, truncated = self.interaction_step(state)
         print(f"{len(self.buffer)} samples populated to buffer")
 
     def train(self, N_GAMES):
         episode = 0
-        self.populate_buffer(10)
+        self.populate_buffer(5)
         while episode < N_GAMES:
             self.running_reward = 0
             self.running_timestep = 0
             state, info = self.env.reset()
             terminal, truncated = False, False
             while not (terminal or truncated):
-                new_state, terminal, truncated = self.interaction_step(state)
+                state, terminal, truncated = self.interaction_step(state)
                 experiences = self.buffer.sample()
                 experiences = self.online_value_model.load(experiences)
                 self.optimize_model(experiences)
-                if self.running_timestep % self.update_interval:
+
+                if self.running_timestep % self.update_interval == 0:
                     self.update_networks()
             self.rewards_history = np.append(self.rewards_history, np.average(self.running_reward))
             print(f"episode: {episode}, timesteps: {self.running_timestep}, "
@@ -233,8 +206,8 @@ if __name__ == '__main__':
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = "cpu"
     print("using", device)
-    BATCH_SIZE = 64
-    LR = 0.005
+    BATCH_SIZE = 256
+    LR = 0.001
     tau = 0.005
     gamma = 1.0
     env_id = "CartPole-v1"
@@ -244,7 +217,7 @@ if __name__ == '__main__':
     bounds = (env.action_space.start, n_action-1)
     env.close()
     update_interval = 5
-    EPOCHS = 2000
+    EPOCHS = 300
     agent = DDPG(env_id, bounds, BATCH_SIZE, update_interval, tau, gamma)
     agent.train(EPOCHS)
     plot_training_history(agent.rewards_history, save=False)

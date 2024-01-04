@@ -246,7 +246,7 @@ class A2C:
         self.optimizer.step()
 
     def interaction_step(self, states):
-        actions, log_pas, entropies, values = self.model.choose_action(states)
+        actions, log_pas, entropies, values = self.model.choose_action_nograd(states)
         new_states, rewards, is_terminals, truncateds, infos = self.envs.step(actions)
         self.logpas.append(log_pas)
         self.rewards.append(rewards)

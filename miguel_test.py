@@ -180,7 +180,7 @@ class DDPG():
         # action = self.training_strategy.select_action(self.online_policy_model,
         #                                               state,
         #                                               len(self.replay_buffer) < min_samples)
-        action = self.online_policy_model.choose_action(state, len(self.replay_buffer) < min_samples)
+        action = self.online_policy_model.choose_action_nograd(state, len(self.replay_buffer) < min_samples)
         new_state, reward, is_terminal, is_truncated, info = env.step(action)
         # is_truncated = 'TimeLimit.truncated' in info and info['TimeLimit.truncated']
         is_failure = is_terminal and not is_truncated
@@ -190,6 +190,7 @@ class DDPG():
         self.episode_timestep[-1] += 1
         # self.episode_exploration[-1] += self.training_strategy.ratio_noise_injected
         return new_state, is_terminal, is_truncated
+        # return new_state, (is_terminal or is_truncated)
 
     def update_networks(self, tau=None):
         tau = self.tau if tau is None else tau
@@ -233,6 +234,7 @@ class DDPG():
 
         self.replay_buffer = self.replay_buffer_fn()
         self.training_strategy = training_strategy_fn(action_bounds)
+        min_samples = self.replay_buffer.batch_size * self.n_warmup_batches
 
         result = np.empty((max_episodes, 5))
         result[:] = np.nan
@@ -244,29 +246,27 @@ class DDPG():
             terminal, truncated = False, False
             # for step in count():
             while not (terminal or truncated):
-                new_state, terminal, truncated = self.interaction_step(state, env)
+                state, terminal, truncated = self.interaction_step(state, env)
 
-                min_samples = self.replay_buffer.batch_size * self.n_warmup_batches
                 if len(self.replay_buffer) > min_samples:
                     experiences = self.replay_buffer.sample()
                     experiences = self.online_value_model.load(experiences)
                     self.optimize_model(experiences)
 
-                if np.sum(self.episode_timestep) % self.update_target_every_steps == 0:
-                    self.update_networks()
+                    if np.sum(self.episode_timestep) % self.update_target_every_steps == 0:
+                        self.update_networks()
 
-                # if is_terminal:
-                #     gc.collect()
-                #     break
+                if terminal or truncated:
+                    gc.collect()
+                    break
             print(f"ep: {episode}, t: {self.episode_timestep[-1]}, reward: {self.episode_reward[-1]:.2f} \t"
                   f"running rewards: {np.average(self.episode_reward[-100:]):.2f}")
 
         # final_eval_score, score_std = self.evaluate(self.online_policy_model, env, n_episodes=100)
         wallclock_time = time.time() - training_start
         print('Training complete.')
-        env.close();
+        env.close()
         del env
-        # self.get_cleaned_checkpoints()
         return result, wallclock_time
 
 
