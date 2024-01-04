@@ -28,19 +28,7 @@ class QVNet(nn.Module):
         self.device = torch.device(device)
         self.to(self.device)
 
-    def _format(self, state):
-        x = state
-        if not isinstance(x, torch.Tensor):
-            x = torch.tensor(x,
-                             device=self.device,
-                             dtype=torch.float32)
-            x = x.unsqueeze(0)
-        return x
-
     def forward(self, s, a):
-        s, a = self._format(s), self._format(a)
-        if len(a.shape) < len(s.shape):
-            a = a.unsqueeze(1)
         x = torch.cat((s, a), dim=1)
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
@@ -79,24 +67,15 @@ class PNet(nn.Module):
     def rescale_function(self, input):
         nn_min = self.out_activation_fn(torch.Tensor([float('-inf')])).to(self.device)
         nn_max = self.out_activation_fn(torch.Tensor([float('inf')])).to(self.device)
-        self.env_max = self._format(self.env_max)
-        self.env_min = self._format(self.env_min)
+        self.env_max = torch.Tensor(self.env_max)
+        self.env_min = torch.Tensor(self.env_min)
         magnitude = input - nn_min  # tanh goes from -1 to 1
         output = magnitude * (self.env_max - self.env_min) / (nn_max - nn_min) + self.env_min
         return output
 
-    def _format(self, state):
-        x = state
-        if not isinstance(x, torch.Tensor):
-            x = torch.tensor(x,
-                             device=self.device,
-                             dtype=torch.float32)
-            x = x.unsqueeze(0)
-        return x
-
     def forward(self, x):
         # TODO: try sigmoid output function and modify rescale function?
-        x = self._format(x)
+        x = torch.Tensor(x)
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
         pi = self.policy_layer(x)
@@ -104,14 +83,15 @@ class PNet(nn.Module):
         pi = self.rescale_function(pi)
         return pi
 
-    def choose_action(self, observation, noise_ratio=0.1):
-        action = self.forward(observation).cpu().detach().data.numpy().squeeze()
+    def choose_action(self, observation, explore, noise_ratio=0.1):
+        with torch.no_grad():
+            action = self.forward(observation).cpu().detach().data.numpy().squeeze()
+        noise_ratio = 1 if explore else noise_ratio
         noise_scale = (self.env_max - self.env_min)/2 * noise_ratio
         # scale here is a standard dev, not range
-        noise = np.random.normal(loc=0, scale=noise_scale, size=action.shape)
+        noise = np.random.normal(loc=0, scale=noise_scale.squeeze())
         action = action + noise
-        action = np.clip(action, self.env_min, self.env_max)
-        return action.reshape(-1)
+        return action.reshape(1)
 
 
 class NormalNoiseStrategy():
@@ -197,9 +177,10 @@ class DDPG():
 
     def interaction_step(self, state, env):
         min_samples = self.replay_buffer.batch_size * self.n_warmup_batches
-        action = self.training_strategy.select_action(self.online_policy_model,
-                                                      state,
-                                                      len(self.replay_buffer) < min_samples)
+        # action = self.training_strategy.select_action(self.online_policy_model,
+        #                                               state,
+        #                                               len(self.replay_buffer) < min_samples)
+        action = self.online_policy_model.choose_action(state, len(self.replay_buffer) < min_samples)
         new_state, reward, is_terminal, is_truncated, info = env.step(action)
         # is_truncated = 'TimeLimit.truncated' in info and info['TimeLimit.truncated']
         is_failure = is_terminal and not is_truncated
@@ -207,8 +188,8 @@ class DDPG():
         self.replay_buffer.store(experience)
         self.episode_reward[-1] += reward
         self.episode_timestep[-1] += 1
-        self.episode_exploration[-1] += self.training_strategy.ratio_noise_injected
-        return new_state, (is_terminal or is_truncated)
+        # self.episode_exploration[-1] += self.training_strategy.ratio_noise_injected
+        return new_state, is_terminal, is_truncated
 
     def update_networks(self, tau=None):
         tau = self.tau if tau is None else tau
@@ -260,9 +241,10 @@ class DDPG():
             self.episode_reward.append(0.0)
             self.episode_timestep.append(0.0)
             self.episode_exploration.append(0.0)
-
-            for step in count():
-                state, is_terminal = self.interaction_step(state, env)
+            terminal, truncated = False, False
+            # for step in count():
+            while not (terminal or truncated):
+                new_state, terminal, truncated = self.interaction_step(state, env)
 
                 min_samples = self.replay_buffer.batch_size * self.n_warmup_batches
                 if len(self.replay_buffer) > min_samples:
@@ -273,9 +255,9 @@ class DDPG():
                 if np.sum(self.episode_timestep) % self.update_target_every_steps == 0:
                     self.update_networks()
 
-                if is_terminal:
-                    gc.collect()
-                    break
+                # if is_terminal:
+                #     gc.collect()
+                #     break
             print(f"ep: {episode}, t: {self.episode_timestep[-1]}, reward: {self.episode_reward[-1]:.2f} \t"
                   f"running rewards: {np.average(self.episode_reward[-100:]):.2f}")
 
@@ -315,6 +297,7 @@ if __name__ == '__main__':
     value_optimizer_lr = 0.0003
 
     training_strategy_fn = lambda bounds: NormalNoiseStrategy(bounds, exploration_noise_ratio=0.1)
+    # training_strategy_fn = None
 
     replay_buffer_fn = lambda: NumpyReplayBuffer(max_size=100000, batch_size=256)
     n_warmup_batches = 5

@@ -34,19 +34,7 @@ class QVNet(nn.Module):
         self.device = torch.device(device)
         self.to(self.device)
 
-    def _format(self, state):
-        x = state
-        if not isinstance(x, torch.Tensor):
-            x = torch.tensor(x,
-                             device=self.device,
-                             dtype=torch.float32)
-            x = x.unsqueeze(0)
-        return x
-
     def forward(self, s, a):
-        s, a = self._format(s), self._format(a)
-        if len(a.shape) < len(s.shape):
-            a = a.unsqueeze(1)
         x = torch.cat((s, a), dim=1)
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
@@ -85,22 +73,15 @@ class PNet(nn.Module):
     def rescale_function(self, input):
         nn_min = self.out_activation_fn(torch.Tensor([float('-inf')])).to(self.device)
         nn_max = self.out_activation_fn(torch.Tensor([float('inf')])).to(self.device)
+        self.env_max = torch.Tensor(self.env_max)
+        self.env_min = torch.Tensor(self.env_min)
         magnitude = input - nn_min  # tanh goes from -1 to 1
         output = magnitude * (self.env_max - self.env_min) / (nn_max - nn_min) + self.env_min
         return output
 
-    def _format(self, state):
-        x = state
-        if not isinstance(x, torch.Tensor):
-            x = torch.tensor(x,
-                             device=self.device,
-                             dtype=torch.float32)
-            x = x.unsqueeze(0)
-        return x
-
     def forward(self, x):
         # TODO: try sigmoid output function and modify rescale function?
-        x = self._format(x)
+        x = torch.Tensor(x)
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
         pi = self.policy_layer(x)
@@ -108,14 +89,38 @@ class PNet(nn.Module):
         pi = self.rescale_function(pi)
         return pi
 
-    def choose_action(self, observation, noise_ratio=0.1):
-        action = self.forward(observation).cpu().detach().data.numpy().squeeze()
+    def choose_action(self, observation, explore, noise_ratio=0.1):
+        with torch.no_grad():
+            action = self.forward(observation).cpu().detach().data.numpy().squeeze()
+        noise_ratio = 1 if explore else noise_ratio
         noise_scale = (self.env_max - self.env_min)/2 * noise_ratio
         # scale here is a standard dev, not range
-        noise = np.random.normal(loc=0, scale=noise_scale, size=action.shape)
+        noise = np.random.normal(loc=0, scale=noise_scale.squeeze())
         action = action + noise
-        action = np.clip(action, self.env_min, self.env_max)
-        return action.reshape(-1)
+        return action.reshape(1)
+
+
+class NormalNoiseStrategy():
+    def __init__(self, bounds, exploration_noise_ratio=0.1):
+        self.low, self.high = bounds
+        self.exploration_noise_ratio = exploration_noise_ratio
+        self.ratio_noise_injected = 0
+
+    def select_action(self, model, state, max_exploration=False):
+        if max_exploration:
+            noise_scale = self.high
+        else:
+            noise_scale = self.exploration_noise_ratio * self.high
+
+        with torch.no_grad():
+            greedy_action = model(state).cpu().detach().data.numpy().squeeze()
+
+        noise = np.random.normal(loc=0, scale=noise_scale, size=len(self.high))
+        noisy_action = greedy_action + noise
+        action = np.clip(noisy_action, self.low, self.high)
+
+        self.ratio_noise_injected = np.mean(abs((greedy_action - action) / (self.high - self.low)))
+        return action
 
 
 class DDPG:
@@ -159,7 +164,7 @@ class DDPG:
         value_loss = td_error.pow(2).mul(0.5).mean()
         self.value_optimizer.zero_grad()
         value_loss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.online_value_model.parameters(), 0.75)
+        torch.nn.utils.clip_grad_norm_(self.online_value_model.parameters(), float('inf'))
         self.value_optimizer.step()
 
         # policy updates:
@@ -168,16 +173,12 @@ class DDPG:
         policy_loss = -max_a_q_s.mean()
         self.policy_optimizer.zero_grad()
         policy_loss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.online_policy_model.parameters(), 0.75)
+        torch.nn.utils.clip_grad_norm_(self.online_policy_model.parameters(), float('inf'))
         self.policy_optimizer.step()
 
     def interaction_step(self, state, explore=False):
         # altering a little because cart-pole has discrete action space
-        with torch.no_grad():
-            if explore:
-                action = self.online_policy_model.choose_action(state, noise_ratio=1.0)
-            else:
-                action = self.online_policy_model.choose_action(state, noise_ratio=0.1)
+        action = self.online_policy_model.choose_action(state, explore)
         new_state, reward, terminated, truncated, info = self.env.step(action)
         experience = (state, action, reward, new_state, int(terminated))
         self.buffer.store(experience)
@@ -244,7 +245,7 @@ if __name__ == '__main__':
     env = gym.make(env_id)
     n_states = env.observation_space.shape[0]
     n_action = env.action_space.shape[0]  # this is a *continuous* action space!
-    bounds = (env.action_space.low[0], env.action_space.high[0])
+    bounds = (env.action_space.low, env.action_space.high)
     env.close()
     update_interval = 1
     EPOCHS = 100
