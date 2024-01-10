@@ -149,3 +149,71 @@ class PrioritizedReplayBuffer:
 
     def __str__(self):
         return str(self.memory[:self.n_entries])
+
+
+class MultiAgentReplayBuffer:
+    def __init__(self, max_size, critic_dims, actor_dims,
+                 n_actions, agent_names, batch_size):
+        self.mem_size = max_size
+        self.mem_count = 0
+        self.actor_dims = actor_dims
+        self.n_actions = n_actions
+        self.agent_names = agent_names
+        self.n_agents = len(agent_names)
+        self.batch_size = batch_size
+
+        self.state_memory = np.zeros((self.mem_size, critic_dims))
+        self.new_state_memory = np.zeros((self.mem_size, critic_dims))
+        self.reward_memory = np.zeros((self.mem_size, self.n_agents))
+        self.terminal_memory = np.zeros((self.mem_size, self.n_agents), dtype=bool)
+        # self.truncated_memory = np.zeros((self.mem_size, self.n_agents), dtype=bool)
+
+        self.actor_action_memory = []
+        self.actor_new_state_memory = []
+        self.actor_state_memory = []
+        self.init_actor_memory()
+
+    def init_actor_memory(self):
+        for value in self.actor_dims.values():
+            self.actor_state_memory.append(np.zeros((self.mem_size, value)))
+            self.actor_new_state_memory.append(np.zeros((self.mem_size, value)))
+            self.actor_action_memory.append(np.zeros((self.mem_size)))
+
+    def store_transition(self, raw_obs, state, action, reward,
+                         raw_obs_, state_, done):
+        index = self.mem_count % self.mem_size
+
+        for agent_idx, agent_name in enumerate(self.agent_names):
+            self.actor_state_memory[agent_idx][index] = raw_obs[agent_name]
+            self.actor_new_state_memory[agent_idx][index] = raw_obs_[agent_name]
+            self.actor_action_memory[agent_idx][index] = action[agent_name]
+
+        self.state_memory[index] = state
+        self.new_state_memory[index] = state_
+        self.reward_memory[index] = np.array(list(reward.values()))
+        self.terminal_memory[index] = np.array(list(done.values()))
+
+        self.mem_count += 1
+
+    def sample_buffer(self):
+        max_mem = min(self.mem_count, self.mem_size)
+        batch = np.random.choice(max_mem, self.batch_size, replace=False)
+        states = self.state_memory[batch]
+        rewards = self.reward_memory[batch]
+        states_ = self.new_state_memory[batch]
+        terminal = self.terminal_memory[batch]
+
+        actor_states = []
+        actor_new_states = []
+        actions = []
+
+        for agent_idx in range(self.n_agents):
+            actor_states.append(self.actor_state_memory[agent_idx][batch])
+            actor_new_states.append(self.actor_new_state_memory[agent_idx][batch])
+            actions.append(self.actor_action_memory[agent_idx][batch])
+        return actor_states, states, actions, rewards, actor_new_states, states_, terminal
+
+    def ready(self):
+        if self.mem_count >= self.batch_size:
+            return True
+        return False

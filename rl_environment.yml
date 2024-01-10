@@ -1,0 +1,15 @@
+name: rl
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python
+  - torch
+  - numpy
+  - matplotlib
+  - gymnasium
+  - tqdm
+  - pip
+  - pip:
+    - pettingzoo[mpe]
