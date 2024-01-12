@@ -180,7 +180,7 @@ class Agent:
 class MADDPG:
     def __init__(self, actor_dims:dict, critic_dims:int, agent_list, n_actions, device, action_ranges,
                  scenario_name='simple', lr_a=0.01, lr_b=0.01, fc_dims=64, gamma=0.99,
-                 tau=0.01, checkpoint_dir="./maddpg/"):
+                 tau=0.01, batch_size=64, checkpoint_dir="./maddpg/"):
         self.agents = []
         self.actor_dims = actor_dims
         self.critic_dims = critic_dims
@@ -189,8 +189,9 @@ class MADDPG:
         self.n_actions = n_actions
         self.action_ranges = action_ranges
         checkpoint_dir += scenario_name
+        self.batch_size = batch_size
         self.buffer = MultiAgentReplayBuffer(1000000, critic_dims, actor_dims, n_actions,
-                                             agent_list, batch_size=5)
+                                             agent_list, batch_size=batch_size)
 
         for agent_name in self.agent_names:
             self.agents.append(
@@ -272,14 +273,24 @@ def obs_list_to_state_vector(observation):
 
 
 if __name__ == '__main__':
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = "cpu"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = "cpu"
     print("using", device)
     # show()
     scenario_name = "simple"
     # scenario_name = "simple_adversary"
-    env = simple_v3.parallel_env()
-    # env = simple_adversary_v3.parallel_env()
+    # env = simple_v3.parallel_env(render_mode="human")
+    env = simple_v3.parallel_env(render_mode=None)
+    # env = simple_adversary_v3.parallel_env(render_mode="human")
+    PRINT_INTERVAL = 500
+    N_GAMES = 30000
+    MAX_STEPS = 25
+    BATCH_SIZE = 1024
+    total_steps = 0
+    score_history = []
+    evaluate = False
+    best_score = 0
+
     env.reset()
     n_agents = env.num_agents
     actor_dims = {}
@@ -294,15 +305,9 @@ if __name__ == '__main__':
         action_ranges[agent] = action_range
     critic_dims = sum(actor_dims.values())
     maddpg_agents = MADDPG(actor_dims, critic_dims, env.agents, n_actions, device, action_ranges,
-                           scenario_name, lr_a=0.01, lr_b=0.01, fc_dims=64, gamma=0.99, tau=0.01)
+                           scenario_name, lr_a=0.01, lr_b=0.01, fc_dims=64, gamma=0.99, tau=0.01,
+                           batch_size=BATCH_SIZE)
     memory = maddpg_agents.buffer
-    PRINT_INTERVAL = 500
-    N_GAMES = 30000
-    MAX_STEPS = 0
-    total_steps = 0
-    score_history = []
-    evaluate = False
-    best_score = 0
 
     if evaluate:
         maddpg_agents.load_checkpoint()
@@ -310,24 +315,17 @@ if __name__ == '__main__':
         obs, infos = env.reset()
         score = 0
         episode_step = 0
-        done = [False] * n_agents
-        while not any(done):
+        while env.agents:
             if evaluate:
                 env.render()
+            # env.render()
             actions = maddpg_agents.choose_action(obs)
-            # test_actions
-            # Out[2]: {'adversary_0': 0, 'agent_0': 2, 'agent_1': 0}
             obs_, reward, done, truncation, info = env.step(actions)
 
             state = obs_list_to_state_vector(obs)
             state_ = obs_list_to_state_vector(obs_)
 
-            if episode_step > MAX_STEPS:
-                done = [True] * n_agents
             memory.store_transition(obs, state, actions, reward, obs_, state_, done)
-
-            if total_steps % 100 == 0 and not evaluate:
-                maddpg_agents.learn()
 
             obs = obs_
             score += sum(reward.values())
@@ -335,6 +333,7 @@ if __name__ == '__main__':
             episode_step += 1
         score_history.append(score)
         avg_score = np.mean(score_history[-100:])
+        maddpg_agents.learn()
 
         if not evaluate:
             if avg_score > best_score:
