@@ -56,8 +56,8 @@ class CriticNetwork(nn.Module):
         if not os.path.exists(self.checkpoint_file):
             os.makedirs(self.checkpoint_file)
 
-        # self.fc1 = nn.Linear(input_dims + n_agents * n_actions, hidden_dim)
-        self.fc1 = nn.Linear(input_dims + n_agents * 1, hidden_dim)
+        self.fc1 = nn.Linear(input_dims + n_agents * n_actions, hidden_dim)
+        # self.fc1 = nn.Linear(input_dims + n_agents * 1, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.q = nn.Linear(hidden_dim, 1)
         self.optimizer = torch.optim.Adam(self.parameters(), lr=lr)
@@ -97,8 +97,8 @@ class ActorNetwork(nn.Module):
         x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
         logits = self.pi(x)
-        dist = Categorical(logits=logits)
-        action = dist.sample()
+        action = F.softmax(logits, dim=0)
+        # action = F.tanh(logits)
         return action
 
     def save_checkpoint(self):
@@ -153,16 +153,17 @@ class Agent:
         self.target_critic.load_state_dict(critic_state_dict)
 
     def choose_action(self, observation, bounds, explore=True):
-        noise = torch.Tensor(0)
         state = torch.Tensor(observation).to(self.device)
-        actions = self.actor.forward(state)
+        action = self.actor.forward(state)
+        noise = torch.rand(self.n_actions).to(self.actor.device) - 0.5
         if explore:
-            noise = torch.rand(1)-0.5
-            noise = (noise * self.n_actions).to(self.device)
-        action = actions + noise
-        action = action.detach().cpu().numpy()[0].round()
-        action = np.clip(action, bounds[0], bounds[1]-1)
-        return int(action)
+            action = action + noise * 0.3
+        else:
+            action = action + noise * 0.05
+        action = bounds[0] + action * bounds[1]
+        action = torch.clip(action, bounds[0], bounds[1])
+        action = action.detach().cpu().numpy()
+        return action
 
     def save_models(self):
         self.actor.save_checkpoint()
@@ -220,6 +221,7 @@ class MADDPG:
 
     def learn(self):
         if not self.buffer.ready():
+            print("buffer not filled yet, buffer count:", self.buffer.mem_count)
             return
         actor_states, states, actions, rewards, actor_new_states, states_, dones = self.buffer.sample_buffer()
         states = torch.Tensor(states).to(device)
@@ -240,9 +242,9 @@ class MADDPG:
             all_agents_new_mu_actions.append(pi)
             old_agents_actions.append(actions[agent_idx])
 
-        new_actions = torch.cat([acts.reshape(-1, 1) for acts in all_agents_new_actions], dim=1)
-        mu = torch.cat([acts.reshape(-1, 1) for acts in all_agents_new_mu_actions], dim=1)
-        old_actions = torch.cat([acts.reshape(-1, 1) for acts in old_agents_actions], dim=1)
+        new_actions = torch.cat([acts for acts in all_agents_new_actions], dim=1)
+        mu = torch.cat([acts for acts in all_agents_new_mu_actions], dim=1)
+        old_actions = torch.cat([acts for acts in old_agents_actions], dim=1)
 
         for agent_idx, agent in enumerate(self.agents):
             critic_value_ = agent.target_critic.forward(states_, new_actions).flatten()
@@ -273,22 +275,22 @@ def obs_list_to_state_vector(observation):
 
 
 if __name__ == '__main__':
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = "cpu"
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cpu"
     print("using", device)
     # show()
     scenario_name = "simple"
-    # scenario_name = "simple_adversary"
-    # env = simple_v3.parallel_env(render_mode="human")
-    env = simple_v3.parallel_env(render_mode=None)
-    # env = simple_adversary_v3.parallel_env(render_mode="human")
-    PRINT_INTERVAL = 500
-    N_GAMES = 30000
     MAX_STEPS = 25
+    # scenario_name = "simple_adversary"
+    # env = simple_v3.parallel_env(render_mode="human", max_cycles=MAX_STEPS, continuous_actions=True)
+    env = simple_v3.parallel_env(render_mode=None, max_cycles=MAX_STEPS, continuous_actions=True)
+    # env = simple_adversary_v3.parallel_env(render_mode="human", max_cycles=MAX_STEPS, continuous_actions=True)
+    PRINT_INTERVAL = 100
+    N_GAMES = 30000
     BATCH_SIZE = 1024
     total_steps = 0
     score_history = []
-    evaluate = False
+    # evaluate = True
     best_score = 0
 
     env.reset()
@@ -298,9 +300,8 @@ if __name__ == '__main__':
     n_actions = None
     for agent in env.agents:
         dim = env.observation_space(agent).shape[0]
-        min_val = env.action_space(agent).start
-        n_actions = env.action_space(agent).n
-        action_range = [min_val, min_val + n_actions]
+        n_actions = env.action_space(agent).shape[0]
+        action_range = [env.action_space(agent).low[0], env.action_space(agent).high[0]]
         actor_dims[agent] = dim
         action_ranges[agent] = action_range
     critic_dims = sum(actor_dims.values())
@@ -309,21 +310,19 @@ if __name__ == '__main__':
                            batch_size=BATCH_SIZE)
     memory = maddpg_agents.buffer
 
-    if evaluate:
-        maddpg_agents.load_checkpoint()
+    # if evaluate:
+    #     maddpg_agents.load_checkpoint()
     for i in range(N_GAMES):
         obs, infos = env.reset()
         score = 0
         episode_step = 0
         while env.agents:
-            if evaluate:
-                env.render()
-            # env.render()
-            actions = maddpg_agents.choose_action(obs)
+            actions = maddpg_agents.choose_action(obs, explore=not memory.ready())
             obs_, reward, done, truncation, info = env.step(actions)
 
             state = obs_list_to_state_vector(obs)
             state_ = obs_list_to_state_vector(obs_)
+            reward = obs_list_to_state_vector(reward)
 
             memory.store_transition(obs, state, actions, reward, obs_, state_, done)
 
@@ -335,9 +334,9 @@ if __name__ == '__main__':
         avg_score = np.mean(score_history[-100:])
         maddpg_agents.learn()
 
-        if not evaluate:
-            if avg_score > best_score:
-                maddpg_agents.save_checkpoint()
-                best_score = avg_score
-        if i % PRINT_INTERVAL == 0 and i > 0:
-            print(f"ep: {i} avg score: {avg_score:.3f}")
+        # if not evaluate:
+        #     if avg_score > best_score:
+        #         maddpg_agents.save_checkpoint()
+        #         best_score = avg_score
+        if i % PRINT_INTERVAL == 0:
+            print(f"ep: {i} score: {score:.3f} avg score: {avg_score:.3f}")
