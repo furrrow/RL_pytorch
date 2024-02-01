@@ -32,11 +32,11 @@ class NumpyReplayBuffer(object):
     def __init__(self,
                  max_size=10000,
                  batch_size=64):
-        self.ss_mem = np.empty(shape=(max_size), dtype=np.ndarray)
-        self.as_mem = np.empty(shape=(max_size), dtype=np.ndarray)
-        self.rs_mem = np.empty(shape=(max_size), dtype=np.ndarray)
-        self.ps_mem = np.empty(shape=(max_size), dtype=np.ndarray)
-        self.ds_mem = np.empty(shape=(max_size), dtype=np.ndarray)
+        self.ss_mem = np.empty(shape=max_size, dtype=np.ndarray)
+        self.as_mem = np.empty(shape=max_size, dtype=np.ndarray)
+        self.rs_mem = np.empty(shape=max_size, dtype=np.ndarray)
+        self.ps_mem = np.empty(shape=max_size, dtype=np.ndarray)
+        self.ds_mem = np.empty(shape=max_size, dtype=np.ndarray)
 
         self.max_size = max_size
         self.batch_size = batch_size
@@ -57,12 +57,11 @@ class NumpyReplayBuffer(object):
         self.size += 1
         self.size = min(self.size, self.max_size)
 
-    def sample(self, batch_size=None):
+    def sample(self, batch_size=None, idxs=None):
         if batch_size is None:
             batch_size = self.batch_size
-
-        idxs = np.random.choice(
-            self.size, batch_size, replace=False)
+        if idxs is None:
+            idxs = np.random.choice(self.size, batch_size, replace=False)
         experiences = np.vstack(self.ss_mem[idxs]), \
             np.vstack(self.as_mem[idxs]), \
             np.vstack(self.rs_mem[idxs]), \
@@ -221,3 +220,45 @@ class MultiAgentReplayBuffer:
     def ready(self):
         if self.mem_cntr >= self.batch_size:
             return True
+
+
+class MultiAgentNumpyBuffer():
+    def __init__(self, max_size, agent_list, batch_size=64):
+        self.agent_list = agent_list
+        self.n_agents = len(agent_list)
+        self.collection = [NumpyReplayBuffer(max_size, batch_size) for name in agent_list]
+        self.max_size = max_size
+        self.batch_size = batch_size
+        self._idx = 0
+        self.size = 0
+
+    def store(self, sample):
+        s, a, r, p, d = sample
+        for idx, name in enumerate(self.agent_list):
+            sub_buffer = self.collection[idx]
+            sub_sample = s[name], a[name], r[name], p[name], d[name]
+            sub_buffer.store(sub_sample)
+
+        self._idx += 1
+        self._idx = self._idx % self.max_size
+
+        self.size += 1
+        self.size = min(self.size, self.max_size)
+
+    def sample(self, batch_size=None):
+        if batch_size is None:
+            batch_size = self.batch_size
+
+        idxs = np.random.choice(self.size, batch_size, replace=False)
+        states, actions, rewards, next_states, terminals = [], [], [], [], []
+        for idx, name in enumerate(self.agent_list):
+            sub_exp = self.collection[idx].sample(batch_size, idxs)
+            states.append(sub_exp[0])
+            actions.append(sub_exp[1])
+            rewards.append(sub_exp[2])
+            next_states.append(sub_exp[3])
+            terminals.append(sub_exp[4])
+        return states, actions, rewards, next_states, terminals
+
+    def __len__(self):
+        return self.size
