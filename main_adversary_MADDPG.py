@@ -144,19 +144,19 @@ class Agent:
 class MADDPG:
     def __init__(self, env, device, lr_a=0.01, lr_b=0.01, fc_dims=64, gamma=0.99,
                  tau=0.01, batch_size=64):
-        env.reset()
         self.env = env
-        self.agent_names = env.agents
+        self.env.reset()
+        self.agent_names = self.env.agents
         self.n_agents = len(self.agent_names)
         self.batch_size = batch_size
         self.obs_dims = {}
         self.action_ranges = {}
         self.n_actions = {}
         for agent in self.env.agents:
-            dim = env.observation_space(agent).shape[0]
+            dim = self.env.observation_space(agent).shape[0]
             self.obs_dims[agent] = dim
-            self.n_actions[agent] = env.action_space(agent).shape[0]
-            action_range = [env.action_space(agent).low[0], env.action_space(agent).high[0]]
+            self.n_actions[agent] = self.env.action_space(agent).shape[0]
+            action_range = [self.env.action_space(agent).low[0], self.env.action_space(agent).high[0]]
             self.action_ranges[agent] = action_range
 
         self.total_states = sum(self.obs_dims.values())
@@ -173,6 +173,7 @@ class MADDPG:
         self.running_timestep = 0
         self.running_reward = 0
         self.update_interval = 5
+        self.print_interval = 50
         self.device = device
 
     def choose_actions(self, raw_obs, explore=True):
@@ -187,22 +188,23 @@ class MADDPG:
         for episode in range(n_epochs):
             self.running_reward = np.zeros(self.n_agents)
             self.running_timestep = 0
-            state, infos = env.reset()
-            while env.agents:
-                state, terminal, truncated = self.interaction_step(state)
+            state, infos = self.env.reset()
+            while self.env.agents:
+                state, terminal, truncated = self.interaction_step(state, self.env)
             self.optimize_model()
-            if self.running_timestep % self.update_interval == 0:
+            self.rewards_history = np.append(self.rewards_history, self.running_reward)
+            if episode % self.update_interval == 0:
                 [agent.update_networks() for agent in self.QAgents]
-            self.rewards_history = np.append(self.rewards_history, np.average(self.running_reward))
-            print(f"ep: {episode}, t: {self.running_timestep}, reward: {self.running_reward:.2f}, \t"
-                  f"running rewards: {np.average(self.rewards_history[-100:]):.2f}")
+            if episode % self.print_interval == 0:
+                print(f"ep: {episode}, t: {self.running_timestep}, reward: {self.running_reward[-1]:.3f}, "
+                      f"running rwd {np.average(self.rewards_history[-50:]):.3f}")
 
-    def interaction_step(self, state):
+    def interaction_step(self, state, myenv):
         actions = maddpg_agents.choose_actions(state, explore=self.buffer.size < BATCH_SIZE)
-        new_state, reward, done, truncated, info = env.step(actions)
+        new_state, reward, done, truncated, info = myenv.step(actions)
         experience = (state, actions, reward, new_state, done)
         self.buffer.store(experience)
-        self.running_reward += list(reward.values())
+        self.running_reward = list(reward.values())
         self.running_timestep += 1
         return new_state, done, truncated
 
@@ -211,26 +213,24 @@ class MADDPG:
             print("buffer not filled yet, buffer count:", len(self.buffer))
             return
         sample = self.buffer.sample()
-        all_states = np.concatenate(sample[0], axis=1)
-        all_actions = np.concatenate(sample[1], axis=1)
+        all_states_np = np.concatenate(sample[0], axis=1)
+        all_actions_np = np.concatenate(sample[1], axis=1)
         all_next_states = np.concatenate(sample[3], axis=1)
-        all_states = torch.from_numpy(all_states).float().to(self.device)
-        all_actions = torch.from_numpy(all_actions).float().to(self.device)
         all_next_states = torch.from_numpy(all_next_states).float().to(self.device)
 
         # aggregate agent actor policies
-        current_state_policies = []
-        next_state_policies = []
+        current_state_policies_list = []
+        next_state_policies_list = []
         for agent_idx, agent in enumerate(self.QAgents):
             agent_state, agent_action, agent_reward, agent_next_state, agent_dones = \
                 self.get_agent_experiences(sample, agent_idx)
             argmax_a_q_s = agent.online_actor(agent_state)
             argmax_a_q_sp = agent.target_actor(agent_next_state)
-            current_state_policies.append(argmax_a_q_s)
-            next_state_policies.append(argmax_a_q_sp)
+            current_state_policies_list.append(argmax_a_q_s.cpu().detach().data.numpy())
+            next_state_policies_list.append(argmax_a_q_sp.cpu().detach().data.numpy())
 
-        current_state_policies = torch.cat(current_state_policies, 1)  # [5,15]
-        next_state_policies = torch.cat(next_state_policies, 1)  # [5, 15]
+        current_state_policies_np = np.concatenate(current_state_policies_list, axis=1)  # [5,15]
+        next_state_policies_np = np.concatenate(next_state_policies_list, axis=1)  # [5, 15]
         # value updates
         for agent_idx, agent in enumerate(self.QAgents):
             agent_state, agent_action, agent_reward, agent_next_state, agent_dones = \
@@ -239,24 +239,30 @@ class MADDPG:
             # value updates
             agent.critic_optimizer.zero_grad()
             # argmax_a_q_sp = agent.target_actor(agent_next_state)
+            next_state_policies = torch.from_numpy(next_state_policies_np).float().to(self.device)
             max_a_q_sp = agent.target_critic(all_next_states, next_state_policies)
             target_q_sa = agent_reward + agent.gamma * max_a_q_sp * (1 - agent_dones)
-            q_sa = agent.online_critic(all_states.clone(), all_actions.clone())
-            td_error = q_sa - target_q_sa.detach()
+
+            all_states = torch.from_numpy(all_states_np).float().to(self.device)
+            all_actions = torch.from_numpy(all_actions_np).float().to(self.device)
+            q_sa = agent.online_critic(all_states, all_actions)
+            td_error = q_sa - target_q_sa.detach_()
             # value_loss = td_error.pow(2).mul(0.5).mean()
-            value_loss = F.mse_loss(q_sa, target_q_sa.detach())
-            print(agent_idx, "value_loss backward pass:")
-            value_loss.backward(retain_graph=True)
+            value_loss = F.mse_loss(q_sa, target_q_sa.detach_())
+            # print(agent_idx, "value_loss backward pass:")
+            value_loss.backward()
             torch.nn.utils.clip_grad_norm_(agent.online_critic.parameters(), float('inf'))
             agent.critic_optimizer.step()
 
             # policy updates:
             agent.actor_optimizer.zero_grad()
             # argmax_a_q_s = agent.online_actor(agent_state)
-            max_a_q_s = agent.online_critic(all_states.clone(), current_state_policies.clone())
+            all_states = torch.from_numpy(all_states_np).float().to(self.device)
+            current_state_policies = torch.from_numpy(current_state_policies_np).float().to(self.device)
+            max_a_q_s = agent.online_critic(all_states, current_state_policies)
             policy_loss = -max_a_q_s.mean()
-            print(agent_idx, "policy_loss backward pass:")
-            policy_loss.backward(retain_graph=True)
+            # print(agent_idx, "policy_loss backward pass:")
+            policy_loss.backward()
             torch.nn.utils.clip_grad_norm_(agent.online_actor.parameters(), float('inf'))
             agent.actor_optimizer.step()
 
@@ -274,22 +280,31 @@ class MADDPG:
         agent_done = torch.from_numpy(agent_done).float().to(self.device)
         return agent_state, agent_action, agent_reward, agent_next_state, agent_done
 
+    def show(self, n_epochs, show_env):
+        for episode in range(n_epochs):
+            self.running_reward = np.zeros(self.n_agents)
+            self.running_timestep = 0
+            state, infos = show_env.reset()
+            while show_env.agents:
+                state, terminal, truncated = self.interaction_step(state, show_env)
+
 
 if __name__ == '__main__':
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = "cpu"
     print("using", device)
     # show()
-    # scenario_name = "simple"
-    scenario_name = "simple_adversary"
-    # env = simple_v3.parallel_env(render_mode="human", continuous_actions=True)
-    # env = simple_v3.parallel_env(render_mode=None, continuous_actions=True)
-    env = simple_adversary_v3.parallel_env(render_mode=None, continuous_actions=True)
-    PRINT_INTERVAL = 100
-    N_GAMES = 30000
-    BATCH_SIZE = 5
-    torch.autograd.set_detect_anomaly(True)
+    N_GAMES = 5000
+    BATCH_SIZE = 1024
+    MAX_CYCLE = 50
+    scenario_name = "simple"
+    # scenario_name = "simple_adversary"
+    # env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode=None, continuous_actions=True)
+    # human_env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="human", continuous_actions=True)
+    env = simple_adversary_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode=None, continuous_actions=True)
+    human_env = simple_adversary_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="human", continuous_actions=True)
 
     maddpg_agents = MADDPG(env, device, lr_a=0.01, lr_b=0.01, fc_dims=64, gamma=0.99, tau=0.01,
                            batch_size=BATCH_SIZE)
     maddpg_agents.train(N_GAMES)
+    maddpg_agents.show(5, human_env)
