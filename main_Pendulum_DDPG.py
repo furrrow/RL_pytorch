@@ -5,6 +5,7 @@ import torch.multiprocessing as mp
 from torch.distributions.categorical import Categorical
 import numpy as np
 import gymnasium as gym
+from gymnasium.utils.save_video import save_video
 from utils import plot_training_history
 from replay_buffer import NumpyReplayBuffer
 from tqdm import tqdm
@@ -12,7 +13,6 @@ from tqdm import tqdm
 """ DDPG code implementation,
 heavily referencing:
 https://github.com/mimoralea/gdrl/blob/master/notebooks/chapter_12/chapter-12.ipynb
-
 
 """
 
@@ -133,7 +133,8 @@ class DDPG:
         self.online_policy_model = PNet(n_states, n_action, bounds)
         self.value_optimizer = torch.optim.Adam(self.online_value_model.parameters(), lr=LR)
         self.policy_optimizer = torch.optim.Adam(self.online_policy_model.parameters(), lr=LR)
-        self.env = gym.make(env_id)
+        self.env_id = env_id
+        self.env = gym.make(env_id, render_mode="rgb_array_list")
         self.buffer = NumpyReplayBuffer(100000, batch_size)
         self.update_interval = update_interval
         self.tau = tau
@@ -167,6 +168,10 @@ class DDPG:
 
         # policy updates:
         argmax_a_q_s = self.online_policy_model(states)
+        # states = states.cpu().data.numpy()
+        # argmax_a_q_s = argmax_a_q_s.cpu().data.numpy()
+        # states = torch.from_numpy(states)
+        # argmax_a_q_s = torch.from_numpy(argmax_a_q_s)
         max_a_q_s = self.online_value_model(states, argmax_a_q_s)
         policy_loss = -max_a_q_s.mean()
         self.policy_optimizer.zero_grad()
@@ -227,6 +232,9 @@ class DDPG:
             print(f"ep: {episode}, t: {self.running_timestep}, reward: {self.running_reward:.2f}, \t"
                   f"running rewards: {np.average(self.rewards_history[-100:]):.2f}")
             episode += 1
+            # save video comes with its own "capped_cubic_video_schedule"
+            save_video(self.env.render(), f"videos/{self.env_id}", fps=30, episode_index=episode)
+
         print("training ended")
         self.env.close()
 

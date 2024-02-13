@@ -3,8 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 import numpy as np
+from utils import plot_training_history
 from replay_buffer import MultiAgentNumpyBuffer
-from pettingzoo.mpe import simple_v3, simple_adversary_v3
+from pettingzoo.mpe import simple_v3, simple_adversary_v3, simple_spread_v3
+from gymnasium.utils.save_video import save_video
+from pettingzoo.utils.save_observation import save_observation
 
 """ MADDPG code implementation,
 adapting Miguel's DDPG for multi-agent env.
@@ -12,29 +15,6 @@ adapting Miguel's DDPG for multi-agent env.
 Using the MPE environment, originally from openAI but using the pettingzoo version
 
 """
-
-
-def show():
-    env = simple_adversary_v3.env(render_mode="human")
-    env.reset(seed=42)
-
-    for agent in env.agent_iter():
-        observation, reward, termination, truncation, info = env.last()
-        print(f"agent name: {agent}")
-        print(f"n_agents: {env.num_agents}")
-        print(f"observation space: {env.observation_space(agent)}")
-        print(f"action_space: {env.action_space(agent)}")
-        print(f"observation: {observation}")
-        print(f"reward: {reward}")
-        print(f"termination: {termination}, truncation, {truncation}")
-        print(f"info: {info}")
-        if termination or truncation:
-            action = None
-        else:
-            # this is where you would insert your policy
-            action = env.action_space(agent).sample()
-        env.step(action)
-    env.close()
 
 
 class CriticNetwork(nn.Module):
@@ -117,24 +97,24 @@ class Agent:
         self.n_agents = n_agents
         self.bounds = bounds
         self.agent_name = agent_name
-        self.online_actor = ActorNetwork(state_size, action_size, hidden_dim, bounds, device)
-        self.online_critic = CriticNetwork(total_state_size, total_action_size, hidden_dim, device)
-        self.target_actor = ActorNetwork(state_size, action_size, hidden_dim, bounds, device)
-        self.target_critic = CriticNetwork(total_state_size, total_action_size, hidden_dim, device)
-        self.actor_optimizer = torch.optim.Adam(self.online_actor.parameters(), lr=lr_a)
-        self.critic_optimizer = torch.optim.Adam(self.online_critic.parameters(), lr=lr_c)
+        self.online_policy_model = ActorNetwork(state_size, action_size, hidden_dim, bounds, device)
+        self.online_value_model = CriticNetwork(total_state_size, total_action_size, hidden_dim, device)
+        self.target_policy_model = ActorNetwork(state_size, action_size, hidden_dim, bounds, device)
+        self.target_value_model = CriticNetwork(total_state_size, total_action_size, hidden_dim, device)
+        self.actor_optimizer = torch.optim.Adam(self.online_policy_model.parameters(), lr=lr_a)
+        self.critic_optimizer = torch.optim.Adam(self.online_value_model.parameters(), lr=lr_c)
         self.device = device
 
     def update_networks(self):
-        for target, online in zip(self.target_critic.parameters(),
-                                  self.online_critic.parameters()):
+        for target, online in zip(self.target_value_model.parameters(),
+                                  self.online_value_model.parameters()):
             target_ratio = (1.0 - self.tau) * target.data
             online_ratio = self.tau * online.data
             mixed_weights = target_ratio + online_ratio
             target.data.copy_(mixed_weights)
 
-        for target, online in zip(self.target_actor.parameters(),
-                                  self.online_actor.parameters()):
+        for target, online in zip(self.target_policy_model.parameters(),
+                                  self.online_policy_model.parameters()):
             target_ratio = (1.0 - self.tau) * target.data
             online_ratio = self.tau * online.data
             mixed_weights = target_ratio + online_ratio
@@ -169,101 +149,110 @@ class MADDPG:
                       self.action_ranges[agent_name], self.n_agents, agent_name, device, lr_a, lr_b, fc_dims, gamma, tau)
             )
         self.buffer = MultiAgentNumpyBuffer(1000000, self.agent_names, batch_size=batch_size)
-        self.rewards_history = np.array([])
+        self.rewards_history = []
         self.running_timestep = 0
         self.running_reward = 0
         self.update_interval = 5
-        self.print_interval = 50
+        self.print_interval = 5
+        self.video_interval = 20
         self.device = device
 
     def choose_actions(self, raw_obs, explore=True):
         actions = {}
         for agent in self.QAgents:
             name = agent.agent_name
-            action = agent.online_actor.choose_action(raw_obs[name], explore)
+            action = agent.online_policy_model.choose_action(raw_obs[name], explore)
             actions[name] = action
         return actions
 
+    def video_schedule(self, episode_id: int) -> bool:
+        return episode_id % self.video_interval == 0
+
     def train(self, n_epochs):
+        self.populate_buffer(5)
         for episode in range(n_epochs):
             self.running_reward = np.zeros(self.n_agents)
             self.running_timestep = 0
+            video_frames = []
             state, infos = self.env.reset()
             while self.env.agents:
-                state, terminal, truncated = self.interaction_step(state, self.env)
+                state, terminal, truncated, video_frame = self.interaction_step(state, self.env, explore=False, return_frame=True)
+                video_frames.append(video_frame)
             self.optimize_model()
-            self.rewards_history = np.append(self.rewards_history, self.running_reward)
+            self.rewards_history.append(self.running_reward)
             if episode % self.update_interval == 0:
                 [agent.update_networks() for agent in self.QAgents]
             if episode % self.print_interval == 0:
                 print(f"ep: {episode}, t: {self.running_timestep}, reward: {self.running_reward[-1]:.3f}, "
-                      f"running rwd {np.average(self.rewards_history[-50:]):.3f}")
+                      f"running rwd {np.average(np.array(self.rewards_history)[:,-1][-100:]):.3f}")
+            # save video comes with its own "capped_cubic_video_schedule"
+            save_video(video_frames, f"videos/{self.env.scenario_name}", episode_trigger=self.video_schedule,
+                       fps=30, episode_index=episode)
 
-    def interaction_step(self, state, myenv):
-        actions = maddpg_agents.choose_actions(state, explore=self.buffer.size < BATCH_SIZE)
+    def populate_buffer(self, n_batches=1):
+        min_samples = self.batch_size * n_batches
+        while len(self.buffer) < self.batch_size:
+            state, info = self.env.reset()
+            while self.env.agents:
+                state, terminal, truncated, video_frame = self.interaction_step(state, self.env, explore=True,
+                                                                                return_frame=False)
+        print(f"{len(self.buffer)} samples populated to buffer")
+
+    def interaction_step(self, state, myenv, explore, return_frame):
+        frame = myenv.render() if return_frame else None
+        actions = maddpg_agents.choose_actions(state, explore=explore)
         new_state, reward, done, truncated, info = myenv.step(actions)
         experience = (state, actions, reward, new_state, done)
         self.buffer.store(experience)
         self.running_reward = list(reward.values())
         self.running_timestep += 1
-        return new_state, done, truncated
+        return new_state, done, truncated, frame
 
     def optimize_model(self):
-        if len(self.buffer) < self.batch_size:
-            print("buffer not filled yet, buffer count:", len(self.buffer))
-            return
         sample = self.buffer.sample()
         all_states_np = np.concatenate(sample[0], axis=1)
         all_actions_np = np.concatenate(sample[1], axis=1)
-        all_next_states = np.concatenate(sample[3], axis=1)
-        all_next_states = torch.from_numpy(all_next_states).float().to(self.device)
+        all_next_states_np = np.concatenate(sample[3], axis=1)
+        all_next_states = torch.from_numpy(all_next_states_np).to(self.device)
+        all_states = torch.from_numpy(all_states_np).float().to(self.device)
+        all_actions = torch.from_numpy(all_actions_np).float().to(self.device)
 
-        # aggregate agent actor policies
-        current_state_policies_list = []
-        next_state_policies_list = []
         for agent_idx, agent in enumerate(self.QAgents):
             agent_state, agent_action, agent_reward, agent_next_state, agent_dones = \
                 self.get_agent_experiences(sample, agent_idx)
-            argmax_a_q_s = agent.online_actor(agent_state)
-            argmax_a_q_sp = agent.target_actor(agent_next_state)
-            current_state_policies_list.append(argmax_a_q_s.cpu().detach().data.numpy())
-            next_state_policies_list.append(argmax_a_q_sp.cpu().detach().data.numpy())
-
-        current_state_policies_np = np.concatenate(current_state_policies_list, axis=1)  # [5,15]
-        next_state_policies_np = np.concatenate(next_state_policies_list, axis=1)  # [5, 15]
-        # value updates
-        for agent_idx, agent in enumerate(self.QAgents):
-            agent_state, agent_action, agent_reward, agent_next_state, agent_dones = \
-                self.get_agent_experiences(sample, agent_idx)
-
             # value updates
             agent.critic_optimizer.zero_grad()
-            # argmax_a_q_sp = agent.target_actor(agent_next_state)
-            next_state_policies = torch.from_numpy(next_state_policies_np).float().to(self.device)
-            max_a_q_sp = agent.target_critic(all_next_states, next_state_policies)
+            next_state_policies_list = []
+            for agent_sub_idx, sub_agent in enumerate(self.QAgents):
+                _, _, _, sub_agent_next_state, _ = self.get_agent_experiences(sample, agent_sub_idx)
+                argmax_a_q_sp = sub_agent.target_policy_model(sub_agent_next_state)
+                next_state_policies_list.append(argmax_a_q_sp)
+            next_state_policies = torch.cat([acts for acts in next_state_policies_list], dim=1)  # [5, 15]
+            max_a_q_sp = agent.target_value_model(all_next_states, next_state_policies)
             target_q_sa = agent_reward + agent.gamma * max_a_q_sp * (1 - agent_dones)
 
-            all_states = torch.from_numpy(all_states_np).float().to(self.device)
-            all_actions = torch.from_numpy(all_actions_np).float().to(self.device)
-            q_sa = agent.online_critic(all_states, all_actions)
+            q_sa = agent.online_value_model(all_states, all_actions)
             td_error = q_sa - target_q_sa.detach_()
             # value_loss = td_error.pow(2).mul(0.5).mean()
             value_loss = F.mse_loss(q_sa, target_q_sa.detach_())
             # print(agent_idx, "value_loss backward pass:")
             value_loss.backward()
-            torch.nn.utils.clip_grad_norm_(agent.online_critic.parameters(), float('inf'))
+            torch.nn.utils.clip_grad_norm_(agent.online_value_model.parameters(), float('inf'))
             agent.critic_optimizer.step()
 
             # policy updates:
             agent.actor_optimizer.zero_grad()
-            # argmax_a_q_s = agent.online_actor(agent_state)
-            all_states = torch.from_numpy(all_states_np).float().to(self.device)
-            current_state_policies = torch.from_numpy(current_state_policies_np).float().to(self.device)
-            max_a_q_s = agent.online_critic(all_states, current_state_policies)
+            current_state_policies_list = []
+            for agent_sub_idx, sub_agent in enumerate(self.QAgents):
+                sub_agent_state, _, _, _, _ = self.get_agent_experiences(sample, agent_sub_idx)
+                argmax_a_q_s = sub_agent.online_policy_model(sub_agent_state)
+                current_state_policies_list.append(argmax_a_q_s)
+            current_state_policies = torch.cat([acts for acts in current_state_policies_list], dim=1)
+            max_a_q_s = agent.online_value_model(all_states, current_state_policies)
             policy_loss = -max_a_q_s.mean()
             # print(agent_idx, "policy_loss backward pass:")
             policy_loss.backward()
-            torch.nn.utils.clip_grad_norm_(agent.online_actor.parameters(), float('inf'))
+            torch.nn.utils.clip_grad_norm_(agent.online_policy_model.parameters(), float('inf'))
             agent.actor_optimizer.step()
 
     def get_agent_experiences(self, sample, agent_idx):
@@ -286,25 +275,26 @@ class MADDPG:
             self.running_timestep = 0
             state, infos = show_env.reset()
             while show_env.agents:
-                state, terminal, truncated = self.interaction_step(state, show_env)
+                state, terminal, truncated, frame = self.interaction_step(state, show_env, explore=False, return_frame=False)
+                show_env.render()
 
 
 if __name__ == '__main__':
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = "cpu"
     print("using", device)
-    # show()
-    N_GAMES = 5000
+    N_GAMES = 500
     BATCH_SIZE = 1024
-    MAX_CYCLE = 50
+    MAX_CYCLE = 75
     scenario_name = "simple"
     # scenario_name = "simple_adversary"
-    # env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode=None, continuous_actions=True)
-    # human_env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="human", continuous_actions=True)
-    env = simple_adversary_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode=None, continuous_actions=True)
-    human_env = simple_adversary_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="human", continuous_actions=True)
-
+    # scenario_name = "simple_spread"
+    env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
+    # env = simple_adversary_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
+    # env = simple_spread_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
+    env.scenario_name = scenario_name
     maddpg_agents = MADDPG(env, device, lr_a=0.01, lr_b=0.01, fc_dims=64, gamma=0.99, tau=0.01,
                            batch_size=BATCH_SIZE)
     maddpg_agents.train(N_GAMES)
-    maddpg_agents.show(5, human_env)
+    plot_training_history(maddpg_agents.rewards_history, save=False)
+    maddpg_agents.show(5, env)

@@ -218,10 +218,10 @@ class MADDPG:
         if not self.buffer.ready():
             print("buffer not filled yet, buffer count:", self.buffer.mem_cntr)
             return
-        actor_states, states, actions, rewards, actor_new_states, states_, dones = self.buffer.sample_buffer()
+        actor_states, np_states, actions, rewards, actor_new_states, states_, dones = self.buffer.sample_buffer()
         """ actor_states or actor_new_states are a list of shapes:
             [(5, 8), (5, 10), (5, 10) """
-        states = torch.Tensor(states).to(device)  # [5, 28]
+        # states = torch.Tensor(np_states).to(device)  # [5, 28]
         actions = torch.Tensor(np.array(actions)).to(device)  # [3, 5, 5]
         rewards = torch.Tensor(rewards).to(device)  # [5, 3]
         states_ = torch.Tensor(states_).to(device)  # [5, 28]
@@ -236,16 +236,18 @@ class MADDPG:
             all_agents_new_actions.append(new_pi)
             mu_states = torch.Tensor(actor_states[agent_idx]).to(device)  # mu is actor "old" states
             pi = agent.actor.forward(mu_states)
-            all_agents_new_mu_actions.append(pi)
+            all_agents_new_mu_actions.append(pi.cpu().detach().data.numpy())
             old_agents_actions.append(actions[agent_idx])
 
         new_actions = torch.cat([acts for acts in all_agents_new_actions], dim=1)  # [5, 15]
-        mu = torch.cat([acts for acts in all_agents_new_mu_actions], dim=1)  # [5, 15]
+        # mu = torch.cat([acts for acts in all_agents_new_mu_actions], dim=1)  # [5, 15]
+        mu_np = np.concatenate(all_agents_new_mu_actions, axis=1)
         old_actions = torch.cat([acts for acts in old_agents_actions], dim=1)  # [5, 15]
 
         for agent_idx, agent in enumerate(self.agents):
             critic_value_ = agent.target_critic.forward(states_, new_actions).flatten()  # [5]
             critic_value_[dones[:, agent_idx]] = 0.0
+            states = torch.Tensor(np_states).to(device)  # [5, 28]
             critic_value = agent.critic.forward(states, old_actions).flatten()  # [5]
 
             target = rewards[:, agent_idx] + agent.gamma * critic_value_  # [5]
@@ -253,14 +255,18 @@ class MADDPG:
             critic_loss = critic_error.pow(2).mul(0.5).mean()  # []
             # critic_loss = F.mse_loss(target, critic_value)
             agent.critic.optimizer.zero_grad()
+            # print(agent_idx, "critic_loss backward pass:")
             critic_loss.backward()
             agent.critic.optimizer.step()
 
-            actor_loss = agent.critic.forward(states, mu).flatten()  # [5]
+            mu = torch.from_numpy(mu_np).float().to(device)
+            states2 = torch.Tensor(np_states).to(device)  # [5, 28]
+            actor_loss = agent.critic.forward(states2, mu).flatten()  # [5]
             # actor_loss = -torch.mean(actor_loss)
             actor_loss = -actor_loss.mean()  # []
             agent.actor.optimizer.zero_grad()
-            actor_loss.backward(retain_graph=True)
+            # print(agent_idx, "actor_loss backward pass:")
+            actor_loss.backward()
             agent.actor.optimizer.step()
 
             agent.update_network_parameters()
