@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
-# import ReplayBuffer
-from torchinfo import summary
 from collections import namedtuple
 
 Transition = namedtuple('Transition',
@@ -69,9 +67,3 @@ class SimpleModel(nn.Module):
     def numpy_float_to_device(self, variable):
         variable = torch.from_numpy(variable).float().to(self.device)
         return variable
-
-    def print_model(self, input_size=None):
-        if input_size is None:
-            print(self)
-        else:
-            summary(self, input_size=input_size)

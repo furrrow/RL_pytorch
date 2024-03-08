@@ -11,5 +11,7 @@ dependencies:
   - gymnasium
   - tqdm
   - pip
+  - pyyaml
+  - moviepy
   - pip:
     - pettingzoo[mpe]
