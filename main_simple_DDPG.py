@@ -1,18 +1,15 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import os
 import numpy as np
 from utils import plot_training_history
 from replay_buffer import MultiAgentNumpyBuffer
 from pettingzoo.mpe import simple_v3, simple_adversary_v3, simple_spread_v3
 from gymnasium.utils.save_video import save_video
-from pettingzoo.utils.save_observation import save_observation
 
-""" MADDPG code implementation,
-adapting Miguel's DDPG for multi-agent env.
-
+""" DDPG code implementation,
 Using the MPE environment, originally from openAI but using the pettingzoo version
+- testing single agent version DDPG on the simple env
 
 """
 
@@ -76,7 +73,7 @@ class ActorNetwork(nn.Module):
     def choose_action(self, observation, explore=True, noise_ratio=0.1):
         with torch.no_grad():
             state = torch.Tensor(observation).to(self.device)
-            action = self.forward(state).cpu().detach().data.numpy().squeeze()
+            action = self.forward(state).detach().data.numpy().squeeze()
         noise_ratio = 1 if explore else noise_ratio
         noise_scale = (self.env_max - self.env_min) / 2 * noise_ratio
         noise = np.random.normal(loc=0, scale=noise_scale.squeeze())
@@ -182,8 +179,10 @@ class MADDPG:
                 print(f"ep: {episode}, t: {self.running_timestep}, reward: {self.running_reward[-1]:.3f}, "
                       f"running rwd {np.average(np.array(self.rewards_history)[:,-1][-100:]):.3f}")
             # save video comes with its own "capped_cubic_video_schedule"
-            save_video(video_frames, f"videos/{self.env.scenario_name}", episode_trigger=self.video_schedule,
+            save_video(video_frames, f"videos/{self.env.scenario_name}",
                        fps=30, episode_index=episode)
+            # save_video(video_frames, f"videos/{self.env.scenario_name}", episode_trigger=self.video_schedule,
+            #            fps=30, episode_index=episode)
 
     def populate_buffer(self, n_batches=1):
         min_samples = self.batch_size * n_batches
@@ -217,38 +216,30 @@ class MADDPG:
         for agent_idx, agent in enumerate(self.QAgents):
             agent_state, agent_action, agent_reward, agent_next_state, agent_dones = \
                 self.get_agent_experiences(sample, agent_idx)
+
             # value updates
-            agent.critic_optimizer.zero_grad()
-            target_actions = []
-            for agent_sub_idx, sub_agent in enumerate(self.QAgents):
-                _, _, _, sub_agent_next_state, _ = self.get_agent_experiences(sample, agent_sub_idx)
-                argmax_a_q_sp = sub_agent.target_policy_model(sub_agent_next_state)
-                target_actions.append(argmax_a_q_sp)
-            next_state_policies = torch.cat([acts for acts in target_actions], dim=1)  # [5, 15]
-            max_a_q_sp = agent.target_value_model(all_next_states, next_state_policies.detach())
+            argmax_a_q_sp = agent.target_policy_model(all_next_states)
+            # next_state_policies = torch.cat([acts for acts in all_actions], dim=1)  # [5, 15]
+            max_a_q_sp = agent.target_value_model(all_next_states, argmax_a_q_sp.detach())
             target_q_sa = agent_reward + agent.gamma * max_a_q_sp.detach() * (1 - agent_dones)
 
             q_sa = agent.online_value_model(all_states, all_actions)
             td_error = q_sa - target_q_sa.detach_()
-            masked_td_error = td_error * (1 - agent_dones)
-            value_loss = masked_td_error.pow(2).mul(0.5).mean()
+            # masked_td_error = td_error * (1 - agent_dones)
+            value_loss = td_error.pow(2).mul(0.5).mean()
             # value_loss = F.mse_loss(q_sa, target_q_sa.detach_())
             # print(agent_idx, "value_loss backward pass:")
+            agent.critic_optimizer.zero_grad()
             value_loss.backward()
             torch.nn.utils.clip_grad_norm_(agent.online_value_model.parameters(), 0.5)
             agent.critic_optimizer.step()
 
             # policy updates:
-            agent.actor_optimizer.zero_grad()
-            current_state_policies_list = []
-            for agent_sub_idx, sub_agent in enumerate(self.QAgents):
-                sub_agent_state, _, _, _, _ = self.get_agent_experiences(sample, agent_sub_idx)
-                argmax_a_q_s = sub_agent.online_policy_model(sub_agent_state)
-                current_state_policies_list.append(argmax_a_q_s)
-            current_state_policies = torch.cat([acts for acts in current_state_policies_list], dim=1)
-            max_a_q_s = agent.online_value_model(all_states, current_state_policies)
+            argmax_a_q_s = agent.online_policy_model(agent_state)
+            max_a_q_s = agent.online_value_model(all_states, argmax_a_q_s)
             policy_loss = -max_a_q_s.mean()
             # print(agent_idx, "policy_loss backward pass:")
+            agent.actor_optimizer.zero_grad()
             policy_loss.backward()
             torch.nn.utils.clip_grad_norm_(agent.online_policy_model.parameters(), 0.5)
             agent.actor_optimizer.step()
@@ -281,17 +272,13 @@ if __name__ == '__main__':
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = "cpu"
     print("using", device)
-    N_GAMES = 500
-    BATCH_SIZE = 1024
-    MAX_CYCLE = 75
+    N_GAMES = 1000
+    BATCH_SIZE = 512
+    MAX_CYCLE = 25
     scenario_name = "simple"
-    # scenario_name = "simple_adversary"
-    # scenario_name = "simple_spread"
     env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
-    # env = simple_adversary_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
-    # env = simple_spread_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
     env.scenario_name = scenario_name
-    maddpg_agents = MADDPG(env, device, lr_a=0.005, lr_b=0.005, fc_dims=64, gamma=0.99, tau=0.01,
+    maddpg_agents = MADDPG(env, device, lr_a=0.0005, lr_b=0.0005, fc_dims=256, gamma=0.99, tau=0.005,
                            batch_size=BATCH_SIZE)
     maddpg_agents.train(N_GAMES)
     plot_training_history(maddpg_agents.rewards_history, save=False)
