@@ -117,3 +117,4 @@ dmypy.json
 # user specific
 .idea
 videos/
+testfiles/

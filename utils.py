@@ -24,15 +24,17 @@ def read_yaml(file_path):
         return yaml.safe_load(f)
 
 
-def plot_training_history(rewards_array: np.array, save: bool=False, filename="history.png"):
+def plot_training_history(rewards_array: np.array, save: bool=False, labels: list = None, filename="history.png"):
     fig = plt.figure()
     rolling_history = []
+    if labels is None:
+        labels = ['rewards', '100 episode rolling avg']
     for t in range(len(rewards_array)):
         subsection = rewards_array[:t+1]
         rolling_history.append(np.average(subsection[-100:]))
     plt.style.use('seaborn-v0_8')
-    plt.plot(rewards_array, alpha=0.5, label='rewards')
-    plt.plot(np.array(rolling_history), label='100 episode rolling avg')
+    plt.plot(rewards_array, alpha=0.5, label=labels[0])
+    plt.plot(np.array(rolling_history), label=labels[1])
     plt.legend()
     if save:
         plt.savefig(filename)

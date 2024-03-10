@@ -97,7 +97,7 @@ class IQL:
         self.print_interval = 5
         self.video_interval = 20
         self.epsilon = 1
-        self.epsilon_decay = 0.99
+        self.epsilon_decay = 0.995
         self.device = device
 
     def choose_actions(self, raw_obs, epsilon=1):
@@ -108,7 +108,7 @@ class IQL:
             if explore:
                 action = self.env.action_spaces[name].sample()
             else:
-                state = torch.Tensor(raw_obs[name])
+                state = torch.Tensor(raw_obs[name]).to(self.device)
                 q_values = agent.online_model(state).cpu().detach().data.numpy().squeeze()
                 action = np.argmax(q_values)
             actions[name] = action
@@ -128,7 +128,7 @@ class IQL:
                 state, terminal, truncated, video_frame = self.interaction_step(state, self.env,
                                                                                 return_frame=True)
                 video_frames.append(video_frame)
-            self.optimize_model()
+                self.optimize_model()
             self.rewards_history.append(self.running_reward)
             self.epsilon *= self.epsilon_decay
             self.epsilon = max(0.005, self.epsilon)
@@ -136,8 +136,8 @@ class IQL:
                 [agent.update_networks() for agent in self.QAgents]
             if episode % self.print_interval == 0:
                 print(f"ep: {episode}, t: {self.running_timestep}, "
-                      f", epsilon: {self.epsilon:.3f}, reward: {self.running_reward[-1]:.3f}, "
-                      f"running rwd {np.average(np.array(self.rewards_history)[:, -1][-100:]):.3f}")
+                      f"epsilon: {self.epsilon:.3f}, reward: {self.running_reward[-1]:.3f}, "
+                      f"running 20 rwd {np.average(np.array(self.rewards_history)[:, -1][-20:]):.3f}")
             # save video comes with its own "capped_cubic_video_schedule"
             save_video(video_frames, f"videos/{self.env.scenario_name}",
                        # episode_trigger=self.video_schedule,  # comment line for schedule
@@ -214,10 +214,10 @@ class IQL:
 
 if __name__ == '__main__':
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = "cpu"
+    device = "cuda"
     print("using", device)
     N_GAMES = 1000
-    BATCH_SIZE = 512
+    BATCH_SIZE = 2048
     MAX_CYCLE = 75
     scenario_name = "simple"
     env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=False)
@@ -225,5 +225,6 @@ if __name__ == '__main__':
     agents = IQL(env, device, lr=0.001, fc_dims=256, gamma=0.99, tau=0.005,
                  batch_size=BATCH_SIZE)
     agents.train(N_GAMES)
-    plot_training_history(agents.rewards_history, save=False)
+    label_list = ['rewards', '20 episode rolling avg']
+    plot_training_history(agents.rewards_history, save=False, label=label_list)
     agents.show(5, env)
