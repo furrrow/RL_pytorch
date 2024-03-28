@@ -118,3 +118,5 @@ dmypy.json
 .idea
 videos/
 testfiles/
+*.csv
+*.png

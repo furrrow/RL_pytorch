@@ -174,13 +174,13 @@ class MADDPG:
             while self.env.agents:
                 state, terminal, truncated, video_frame = self.interaction_step(state, self.env, explore=False, return_frame=True)
                 video_frames.append(video_frame)
-            self.optimize_model()
+            self.optimize_model()  # TODO: when to optimize for ddpg?
             self.rewards_history.append(self.running_reward)
             if episode % self.update_interval == 0:
                 [agent.update_networks() for agent in self.QAgents]
             if episode % self.print_interval == 0:
                 print(f"ep: {episode}, t: {self.running_timestep}, reward: {self.running_reward[-1]:.3f}, "
-                      f"running rwd {np.average(np.array(self.rewards_history)[:,-1][-100:]):.3f}")
+                      f"running rwd {np.average(np.array(self.rewards_history)[:,-1][-20:]):.3f}")
             # save video comes with its own "capped_cubic_video_schedule"
             save_video(video_frames, f"videos/{self.env.scenario_name}", episode_trigger=self.video_schedule,
                        fps=30, episode_index=episode)
@@ -284,15 +284,17 @@ if __name__ == '__main__':
     N_GAMES = 500
     BATCH_SIZE = 1024
     MAX_CYCLE = 75
-    scenario_name = "simple"
-    # scenario_name = "simple_adversary"
+    # scenario_name = "simple"
+    scenario_name = "simple_adversary"
     # scenario_name = "simple_spread"
     env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
+    show_env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="human", continuous_actions=True)
     # env = simple_adversary_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
     # env = simple_spread_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
     env.scenario_name = scenario_name
-    maddpg_agents = MADDPG(env, device, lr_a=0.005, lr_b=0.005, fc_dims=64, gamma=0.99, tau=0.01,
+    maddpg_agents = MADDPG(env, device, lr_a=0.001, lr_b=0.001, fc_dims=64, gamma=0.99, tau=0.01,
                            batch_size=BATCH_SIZE)
     maddpg_agents.train(N_GAMES)
-    plot_training_history(maddpg_agents.rewards_history, save=False)
-    maddpg_agents.show(5, env)
+    label_list = ['rewards', '20 episode rolling avg']
+    plot_training_history(maddpg_agents.rewards_history, save=True, labels=label_list, filename=scenario_name)
+    maddpg_agents.show(2, show_env)

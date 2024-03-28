@@ -7,7 +7,8 @@ from replay_buffer import MultiAgentNumpyBuffer
 from pettingzoo.mpe import simple_v3, simple_adversary_v3, simple_spread_v3
 from gymnasium.utils.save_video import save_video
 
-""" DQN code implementation as IQL (independent q-learning)
+""" 
+IQL implementation for adversary env for comparison
 Using the MPE environment, originally from openAI but using the pettingzoo version
 
 """
@@ -129,6 +130,7 @@ class IQL:
                                                                                 return_frame=True)
                 video_frames.append(video_frame)
                 self.optimize_model()
+            # TODO: record rewards history alongside agent names!
             self.rewards_history.append(self.running_reward)
             self.epsilon *= self.epsilon_decay
             self.epsilon = max(0.005, self.epsilon)
@@ -214,14 +216,16 @@ class IQL:
 
 if __name__ == '__main__':
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = "cuda"
+    device = "cpu"
     print("using", device)
-    N_GAMES = 30
+    N_GAMES = 500
     BATCH_SIZE = 512
     MAX_CYCLE = 75
-    scenario_name = "simple"
-    env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=False)
-    show_env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="human", continuous_actions=False)
+    # scenario_name = "simple"
+    scenario_name = "simple_adversary"
+    # scenario_name = "simple_spread"
+    env = simple_adversary_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=False)
+    show_env = simple_adversary_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="human", continuous_actions=False)
     env.scenario_name = scenario_name
     agents = IQL(env, device, lr=0.0005, fc_dims=256, gamma=0.99, tau=0.01,
                  batch_size=BATCH_SIZE)
