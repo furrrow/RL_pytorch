@@ -278,19 +278,20 @@ class MADDPG:
 
 
 if __name__ == '__main__':
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = "cpu"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = "cpu"
     print("using", device)
     N_GAMES = 500
     BATCH_SIZE = 1024
     MAX_CYCLE = 75
     # scenario_name = "simple"
-    scenario_name = "simple_adversary"
-    # scenario_name = "simple_spread"
-    env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
-    show_env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="human", continuous_actions=True)
+    # scenario_name = "simple_adversary"
+    scenario_name = "simple_spread"
+    # env = simple_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
     # env = simple_adversary_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
-    # env = simple_spread_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
+    env = simple_spread_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="rgb_array", continuous_actions=True)
+
+    show_env = simple_spread_v3.parallel_env(max_cycles=MAX_CYCLE, render_mode="human", continuous_actions=True)
     env.scenario_name = scenario_name
     maddpg_agents = MADDPG(env, device, lr_a=0.001, lr_b=0.001, fc_dims=64, gamma=0.99, tau=0.01,
                            batch_size=BATCH_SIZE)

@@ -7,100 +7,15 @@ from pettingzoo.mpe import simple_v3
 from tqdm import tqdm
 import pickle
 
+from policy.EGreedyExpStrategy import EGreedyExpStrategy
+from replay_buffer import PrioritizedReplayBuffer
+
 """
 Jim T's version of IQL
 - DQN with double Q-learning, dueling network and prioritized experience replay improvements
 - Prioritized Replay Buffer module code from https://github.com/mimoralea/gdrl, 
 - comments added for more clarity
 """
-
-
-class PrioritizedReplayBuffer():
-    def __init__(self,
-                 max_samples=10000,
-                 batch_size=64,
-                 rank_based=False,
-                 alpha=0.6,
-                 beta0=0.1,
-                 beta_rate=0.99992,
-                 epsilon=1e-6):
-        self.max_samples = max_samples
-        self.memory = np.empty(shape=(self.max_samples, 2), dtype=np.ndarray)  # 2-d array of sample experiences and
-        # td errors
-        self.batch_size = batch_size
-        self.n_entries = 0  # current size of buffer
-        self.next_index = 0  # index to add/overwrite new samples
-        self.td_error_index = 0  # self.memory[idx, 0] = sample td error
-        self.sample_index = 1  # self.memory[idx, 1] = sampled experience
-        self.rank_based = rank_based  # if not rank_based, then proportional
-        self.alpha = alpha  # how much prioritization to use 0 is uniform (no priority), 1 is full priority
-        self.beta = beta0  # bias correction 0 is no correction 1 is full correction
-        self.beta0 = beta0  # beta0 is just beta's initial value
-        self.beta_rate = beta_rate
-        self.epsilon = epsilon
-
-    # update absolute td errors on sampled experiences
-    def update(self, idxs, td_errors):
-        self.memory[idxs, self.td_error_index] = np.abs(td_errors)
-        if self.rank_based:  # if using rank-based PER, resort samples
-            sorted_arg = self.memory[:self.n_entries, self.td_error_index].argsort()[::-1]
-            self.memory[:self.n_entries] = self.memory[sorted_arg]
-
-    def store(self, sample):
-        priority = 1.0
-        # set initial priority to max to prioritize unsampled experiences
-        if self.n_entries > 0:
-            priority = self.memory[
-                       :self.n_entries,
-                       self.td_error_index].max()
-        self.memory[self.next_index,
-        self.td_error_index] = priority  # store sample priority
-        self.memory[self.next_index,
-        self.sample_index] = np.array(sample, dtype=object)  # store sample experience
-
-        self.n_entries = min(self.n_entries + 1, self.max_samples)
-        self.next_index += 1
-        self.next_index = self.next_index % self.max_samples
-
-    def _update_beta(self):
-        self.beta = min(1.0, self.beta * self.beta_rate ** -1)
-        return self.beta
-
-    def sample(self, batch_size=None):
-        batch_size = self.batch_size if batch_size == None else batch_size
-        self._update_beta()
-        entries = self.memory[:self.n_entries]
-
-        if self.rank_based:  # rank based priority: P(i) = 1/rank(i) (highest absolute TD error = 1)
-            priorities = 1 / (np.arange(self.n_entries) + 1)
-        else:  # proportional
-            priorities = entries[:, self.td_error_index] + self.epsilon  # add small epsilon for zero TD error samples
-        scaled_priorities = priorities ** self.alpha  # scale by prioritization hyperparameter (0=uniform/no priority, 1=full priority)
-        probs = np.array(scaled_priorities / np.sum(scaled_priorities), dtype=np.float64)  # rescale to probabilities
-
-        # introduce importance-sampling weights in loss function to offset prioritization bias
-        weights = (self.n_entries * probs) ** -self.beta
-        normalized_weights = weights / weights.max()
-
-        # sample replay buffer
-        idxs = np.random.choice(self.n_entries, batch_size, replace=False, p=probs)
-        samples = np.array([entries[idx] for idx in idxs])
-
-        # return samples (experiences), indexes (to update absolute TD errors during optimization),
-        # and importance-sampling weights (for loss function to offset bias)
-        samples_stacks = [np.vstack(batch_type) for batch_type in np.vstack(samples[:, self.sample_index]).T]
-        idxs_stack = np.vstack(idxs)
-        weights_stack = np.vstack(normalized_weights[idxs])
-        return idxs_stack, weights_stack, samples_stacks
-
-    def __len__(self):
-        return self.n_entries
-
-    def __repr__(self):
-        return str(self.memory[:self.n_entries])
-
-    def __str__(self):
-        return str(self.memory[:self.n_entries])
 
 
 class FCDuelingQ(nn.Module):
@@ -188,32 +103,6 @@ class FCDuelingQ(nn.Module):
         return states, actions, new_states, rewards, is_terminals
 
 
-class EGreedyExpStrategy():
-    def __init__(self, init_epsilon=1.0, min_epsilon=0.1, decay_steps=20000):
-        self.exploratory_action_taken = None
-        self.epsilon = init_epsilon
-        self.init_epsilon = init_epsilon
-        self.decay_steps = decay_steps
-        self.min_epsilon = min_epsilon
-        self.epsilons = 0.01 / np.logspace(-2, 0, decay_steps, endpoint=False) - 0.01
-        self.epsilons = self.epsilons * (init_epsilon - min_epsilon) + min_epsilon
-        self.t = 0
-
-    def select_action(self, model, state):
-        self.exploratory_action_taken = False
-        with torch.no_grad():
-            if np.random.rand() > self.epsilon:
-                action = model(state).detach().max(1).indices.view(1,
-                                                                   1).item()  # choose action with highest estimated value
-            else:
-                action = np.random.randint(model(state).shape[1])  # random action
-
-        self.epsilon = self.min_epsilon if self.t >= self.decay_steps else self.epsilons[self.t]
-        self.t += 1
-
-        return action
-
-
 class DDQN():
     def __init__(self,
                  value_model_fn=lambda num_obs, nA: FCDuelingQ(num_obs, nA),  # state vars, nA -> model
@@ -254,13 +143,13 @@ class DDQN():
         copy.load_state_dict(self.online_model.state_dict())
         return copy
 
-    def _marl_copy_model(self, env, agent):
+    def marl_copy_model(self, env, agent):
         copy = self.value_model_fn(len(env.observation_space(agent).sample()), env.action_space(agent).n)
         copy.load_state_dict(self.online_model.state_dict())
         return copy
 
     # initialize independent DQN model for agent given MARL (pettingzoo) environment
-    def _marl_init_model(self, env, agent, gamma, batch_size=None):
+    def marl_init_model(self, env, agent, gamma, batch_size=None):
         self.gamma = gamma
         # initialize online and target models
         self.online_model = self.value_model_fn(len(env.observation_space(agent).sample()), env.action_space(agent).n)
@@ -315,7 +204,7 @@ class DDQN():
         if greedy:
             return self.online_model(state).detach().max(1).indices.view(1, 1).item()
         else:
-            self.exploration_strategy.select_action(self.online_model, state)
+            return self.exploration_strategy.select_action(self.online_model, state)
 
     def train(self, env, gamma=1.0, num_episodes=100, batch_size=None, n_warmup_batches=5, tau=0.005,
               target_update_steps=1, save_models=None):
@@ -330,8 +219,9 @@ class DDQN():
         best_model = None
 
         i = 0
+        i_prev = 0
         episode_returns = np.zeros(num_episodes)
-        for episode in tqdm(range(num_episodes)):
+        for episode in range(num_episodes):
             state = env.reset()[0]
             ep_return = 0
             for t in count():
@@ -365,6 +255,10 @@ class DDQN():
 
                     episode_returns[episode] = ep_return
                     break
+            print(f"ep: {episode}, t: {i - i_prev}, "
+                  f"epsilon: {self.epsilon:.3f}, reward: {self.running_reward[-1]:.3f}, "
+                  f"running 20 rwd {np.average(np.array(self.rewards_history)[:, -1][-20:]):.3f}")
+            i_prev = i
 
         return episode_returns, best_model, saved_models
 
@@ -379,7 +273,7 @@ class IQL():
     def _init_dqns(self, env, gamma, batch_size=None):
         for agent in env.possible_agents:
             dqn = self.dqn_fn(agent)
-            dqn._marl_init_model(env, agent, gamma, batch_size)
+            dqn.marl_init_model(env, agent, gamma, batch_size)
             self.dqns[agent] = dqn
 
     def train(self, env, gamma=1.0, num_episodes=100, parallel=False, batch_size=None, n_warmup_batches=5, tau=None,
@@ -392,7 +286,7 @@ class IQL():
         saved_models = {}
         best_model = {agent: None for agent in self.dqns}
 
-        for episode in tqdm(range(num_episodes)):
+        for episode in range(num_episodes):
             # previous iter experience variables (state and action) for each agent tracked in dict
             experience = {agent: {'state': None, 't': 0, 'return': 0} for agent in self.dqns}
             env.reset()
@@ -427,10 +321,10 @@ class IQL():
             for agent in self.dqns:
                 # save best model
                 if exp['return'] >= np.max(episode_returns[agent]):
-                    best_model[agent] = self.dqns[agent]._marl_copy_model(env, agent)
+                    best_model[agent] = self.dqns[agent].marl_copy_model(env, agent)
             # copy and save models
             if save_models and len(saved_models) < len(save_models) and episode + 1 == save_models[len(saved_models)]:
-                saved_models[episode + 1] = {agent: self.dqns[agent]._marl_copy_model(env, agent) for agent in
+                saved_models[episode + 1] = {agent: self.dqns[agent].marl_copy_model(env, agent) for agent in
                                              self.dqns}
 
         return episode_returns, best_model, saved_models

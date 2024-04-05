@@ -1,15 +1,14 @@
 import torch
 import torch.optim as optim
-import gymnasium as gym
 import numpy as np
 
-from rl_optimizer import optimize_jim, optimize_miguel
+from rl_optimizer import optimize_jim
 from models.SimpleModel import SimpleModel
 from models.CNNModel import CNNModel
 from policy.EGreedyStrategy import EGreedyStrategy
 from policy.EGreedyExpStrategy import EGreedyExpStrategy
 from policy.LinearDecayStrategy import LinearDecayStrategy
-from RandomStrategy import RandomStrategy
+from policy.RandomStrategy import RandomStrategy
 
 
 class DDQNAgent:

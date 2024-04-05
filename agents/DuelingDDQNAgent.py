@@ -12,7 +12,7 @@ from models.DuelingCNNModel import DuelingCNNModel
 from policy.EGreedyStrategy import EGreedyStrategy
 from policy.EGreedyExpStrategy import EGreedyExpStrategy
 from policy.LinearDecayStrategy import LinearDecayStrategy
-from RandomStrategy import RandomStrategy
+from policy.RandomStrategy import RandomStrategy
 
 
 class DuelingDDQNAgent:
