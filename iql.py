@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from pettingzoo.mpe import simple_v3
+from gymnasium.utils.save_video import save_video
 from tqdm import tqdm
 import pickle
 
@@ -26,7 +27,7 @@ class FCDuelingQ(nn.Module):
                  v_hidden_dims=(32,),
                  a_hidden_dims=(32,),
                  activation_fc=nn.ReLU,
-                 device=torch.device("cpu")):
+                 device_name="cpu"):
         super(FCDuelingQ, self).__init__()
 
         # build hidden layers for features, value stream, and advantage stream
@@ -66,10 +67,7 @@ class FCDuelingQ(nn.Module):
             nn.Linear(a_hidden_dims[-1], output_dim)
         )
 
-        if not torch.cuda.is_available():
-            device = torch.device("cpu")
-
-        self.device = device
+        self.device = torch.device(device_name)
         self.to(self.device)
 
     def _format(self, state):
@@ -105,38 +103,30 @@ class FCDuelingQ(nn.Module):
 
 class DDQN():
     def __init__(self,
-                 value_model_fn=lambda num_obs, nA: FCDuelingQ(num_obs, nA),  # state vars, nA -> model
-                 value_optimizer_fn=lambda params, lr: optim.RMSprop(params, lr),  # model params, lr -> optimizer
                  value_optimizer_lr=1e-4,  # optimizer learning rate
                  loss_fn=nn.MSELoss(),  # input, target -> loss
-                 exploration_strategy_fn=lambda: EGreedyExpStrategy(),
+                 exploration_strategy=EGreedyExpStrategy(),
                  # module with select_action function (model, state) -> action
-                 replay_buffer_fn=lambda: PrioritizedReplayBuffer(10000),
+                 replay_buffer=PrioritizedReplayBuffer(10000),
+                 device="cpu",
                  max_gradient_norm=None,
                  tau=0.005,
                  target_update_steps=1
                  ):
+        self.optimizer = None
+        self.target_model = None
+        self.online_model = None
         self.gamma = None
-        self.memory = None
-        self.exploration_strategy = None
-        self.value_model_fn = value_model_fn
-        self.value_optimizer_fn = value_optimizer_fn
+        self.exploration_strategy = exploration_strategy
+        self.value_model_fn = None
         self.value_optimizer_lr = value_optimizer_lr
         self.loss_fn = loss_fn
-        self.exploration_strategy_fn = exploration_strategy_fn
-        self.memory_fn = replay_buffer_fn
+        self.memory = replay_buffer
         self.max_gradient_norm = max_gradient_norm
         self.tau = tau
         self.target_update_steps = target_update_steps
+        self.device = device
 
-    def _init_model(self, env):
-        # initialize online and target models
-        self.online_model = self.value_model_fn(len(env.observation_space.sample()), env.action_space.n)
-        self.target_model = self.value_model_fn(len(env.observation_space.sample()), env.action_space.n)
-        self.target_model.load_state_dict(
-            self.online_model.state_dict())  # copy online model parameters to target model
-        # initialize optimizer
-        self.optimizer = self.value_optimizer_fn(self.online_model.parameters(), lr=self.value_optimizer_lr)
 
     def _copy_model(self, env):
         copy = self.value_model_fn(len(env.observation_space.sample()), env.action_space.n)
@@ -152,19 +142,17 @@ class DDQN():
     def marl_init_model(self, env, agent, gamma, batch_size=None):
         self.gamma = gamma
         # initialize online and target models
-        self.online_model = self.value_model_fn(len(env.observation_space(agent).sample()), env.action_space(agent).n)
-        self.target_model = self.value_model_fn(len(env.observation_space(agent).sample()), env.action_space(agent).n)
+        self.online_model = FCDuelingQ(len(env.observation_space(agent).sample()), env.action_space(agent).n,
+                                       hidden_dims=(512,), device_name=self.device)
+        self.target_model = FCDuelingQ(len(env.observation_space(agent).sample()), env.action_space(agent).n,
+                                       hidden_dims=(512,), device_name=self.device)
         self.target_model.load_state_dict(
             self.online_model.state_dict())  # copy online model parameters to target model
         # initialize optimizer
-        self.optimizer = self.value_optimizer_fn(self.online_model.parameters(), lr=self.value_optimizer_lr)
+        self.optimizer = optim.RMSprop(self.online_model.parameters(), lr=self.value_optimizer_lr)
 
         # initialize replay memory
-        self.memory = self.memory_fn()
         self.batch_size = batch_size if batch_size else self.memory.batch_size
-
-        # initialize exploration strategy
-        self.exploration_strategy = self.exploration_strategy_fn()
 
     def update_target_network(self, tau=None):
         tau = tau if tau else self.tau
@@ -206,73 +194,19 @@ class DDQN():
         else:
             return self.exploration_strategy.select_action(self.online_model, state)
 
-    def train(self, env, gamma=1.0, num_episodes=100, batch_size=None, n_warmup_batches=5, tau=0.005,
-              target_update_steps=1, save_models=None):
-        self.exploration_strategy = self.exploration_strategy_fn()
-        self.memory = self.memory_fn()
-        if save_models:  # list of episodes to save models
-            save_models.sort()
-        self.gamma = gamma
-        self._init_model(env)
 
-        saved_models = {}
-        best_model = None
-
-        i = 0
-        i_prev = 0
-        episode_returns = np.zeros(num_episodes)
-        for episode in range(num_episodes):
-            state = env.reset()[0]
-            ep_return = 0
-            for t in count():
-                i += 1
-                action = self.get_action(state)  # use online model to select action
-                next_state, reward, terminated, truncated, _ = env.step(action)
-                self.memory.store((state, action, reward, next_state, terminated))  # store experience in replay memory
-
-                state = next_state
-
-                if len(self.memory) >= batch_size * n_warmup_batches:  # optimize policy model
-                    self.optimize_model(batch_size)
-
-                # update target network with tau
-                if i % target_update_steps == 0:
-                    self.update_target_network(tau)
-
-                ep_return += reward * gamma ** t  # add discounted reward to return
-                if terminated or truncated:
-                    # save best model
-                    if ep_return >= episode_returns.max():
-                        copy = self.value_model_fn(len(env.observation_space.sample()), env.action_space.n)
-                        copy.load_state_dict(self.online_model.state_dict())
-                        best_model = copy
-                    # copy and save model
-                    if save_models and len(saved_models) < len(save_models) and episode + 1 == save_models[
-                        len(saved_models)]:
-                        copy = self.value_model_fn(len(env.observation_space.sample()), env.action_space.n)
-                        copy.load_state_dict(self.online_model.state_dict())
-                        saved_models[episode + 1] = copy
-
-                    episode_returns[episode] = ep_return
-                    break
-            print(f"ep: {episode}, t: {i - i_prev}, "
-                  f"epsilon: {self.epsilon:.3f}, reward: {self.running_reward[-1]:.3f}, "
-                  f"running 20 rwd {np.average(np.array(self.rewards_history)[:, -1][-20:]):.3f}")
-            i_prev = i
-
-        return episode_returns, best_model, saved_models
-
-
-class IQL():
+class IQL:
     def __init__(self,
-                 dqn_fn=lambda agent: DDQN(),  # agent str -> DQN model
+                 dqn_fn,  # agent str -> DQN model
                  ):
         self.dqn_fn = dqn_fn
         self.dqns = {}  # dictionary of agent str: dqn model
+        self.print_interval = 5
+        self.video_interval = 10
 
     def _init_dqns(self, env, gamma, batch_size=None):
         for agent in env.possible_agents:
-            dqn = self.dqn_fn(agent)
+            dqn = self.dqn_fn
             dqn.marl_init_model(env, agent, gamma, batch_size)
             self.dqns[agent] = dqn
 
@@ -290,6 +224,7 @@ class IQL():
             # previous iter experience variables (state and action) for each agent tracked in dict
             experience = {agent: {'state': None, 't': 0, 'return': 0} for agent in self.dqns}
             env.reset()
+            video_frames = []
             for agent in env.agent_iter():
                 iter[agent] += 1
                 dqn = self.dqns[agent]
@@ -316,29 +251,38 @@ class IQL():
                     exp['action'] = dqn.get_action(next_state)  # get action from model
                     exp['state'] = next_state
 
+                frame = env.render()
+                video_frames.append(frame)
                 env.step(exp['action'])
-
-            for agent in self.dqns:
-                # save best model
-                if exp['return'] >= np.max(episode_returns[agent]):
-                    best_model[agent] = self.dqns[agent].marl_copy_model(env, agent)
-            # copy and save models
-            if save_models and len(saved_models) < len(save_models) and episode + 1 == save_models[len(saved_models)]:
-                saved_models[episode + 1] = {agent: self.dqns[agent].marl_copy_model(env, agent) for agent in
-                                             self.dqns}
-
+            if episode % self.print_interval == 0:
+                print(f"ep: {episode}, t: {iter[agent]}, "
+                      f"epsilon: {self.dqns[agent].exploration_strategy.epsilon:.3f}, reward: {exp['return']:.3f}, "
+                      f"running 20 rwd {np.average(np.array(episode_returns[agent])[-20:]):.3f}")
+            save_video(video_frames, f"videos/{env.scenario_name}",
+                       # episode_trigger=self.video_schedule,  # able to set manual save schedule
+                       fps=30, episode_index=episode)
         return episode_returns, best_model, saved_models
+
+    def video_schedule(self, episode_id: int) -> bool:
+        return episode_id % self.video_interval == 0
 
 
 if __name__ == '__main__':
     # env = simple_spread_v3.env()
-    env = simple_v3.env(max_cycles=75, continuous_actions=False)
-
-    iql = IQL(dqn_fn=lambda _: DDQN(
-        value_model_fn=lambda num_obs, nA: FCDuelingQ(num_obs, nA, hidden_dims=(512,), device=torch.device("cuda")),
+    env = simple_v3.env(max_cycles=75, render_mode="rgb_array", continuous_actions=False)
+    env.scenario_name = "simple"
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cpu"
+    print("using", device)
+    my_buffer = PrioritizedReplayBuffer()
+    my_strategy = EGreedyExpStrategy(min_epsilon=0.01)
+    my_ddqn = DDQN(
         value_optimizer_lr=0.0005,
-        exploration_strategy_fn=lambda: EGreedyExpStrategy(min_epsilon=0.01),
-        replay_buffer_fn=lambda: PrioritizedReplayBuffer()))
+        exploration_strategy=my_strategy,
+        replay_buffer=my_buffer,
+        device=device
+    )
+    iql = IQL(dqn_fn=my_ddqn)
 
     episode_returns, best_model, saved_models = iql.train(env, num_episodes=50, tau=0.01, batch_size=128,
                                                           n_warmup_batches=5,
@@ -346,5 +290,5 @@ if __name__ == '__main__':
     results = {'episode_returns': episode_returns, 'best_model': best_model, 'saved_models': saved_models}
     print(results)
 
-    with open('testfiles/iql_simple.results', 'wb') as file:
+    with open('save_models/iql_simple.results', 'wb') as file:
         pickle.dump(results, file)
