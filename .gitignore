@@ -120,3 +120,4 @@ videos/
 save_models/
 *.csv
 *.png
+*.npy

@@ -1,11 +1,13 @@
 import numpy as np
+import pickle
 from itertools import count
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from gymnasium.utils.save_video import save_video
+from utils import plot_training_history
 from tqdm import tqdm
-
+from pettingzoo.mpe import simple_reference_v3, simple_adversary_v3, simple_spread_v3
 from replay_buffer import PrioritizedReplayBuffer
 
 """
@@ -450,7 +452,8 @@ class MADDPG():
                     if r >= np.max(episode_returns[agent]):  # save best model
                         best_model[agent] = self.agents[agent].copy_policy_model()
                     if episode % self.print_interval == 0:
-                        print(f"{agent}, reward: {episode_returns[agent][-1]:.3f}, running rwd {np.average(episode_returns[agent][-20:]):.3f}")
+                        print(
+                            f"{agent}, reward: {episode_returns[agent][-1]:.3f}, running rwd {np.average(episode_returns[agent][-20:]):.3f}")
 
             save_video(video_frames, f"videos/{env.scenario_name}",
                        # episode_trigger=self.video_schedule,  # able to set manual save schedule
@@ -489,7 +492,6 @@ if __name__ == '__main__':
     #    pickle.dump(results, file)
 
     # spread
-    # from pettingzoo.mpe import simple_spread_v3
     # env = simple_spread_v3.parallel_env(max_cycles=50, continuous_actions=True)
     # maddpg = MADDPG(agent_fn = lambda agent: MADDPGAgent(
     #     policy_model_fn = lambda num_obs, bounds: FCDP(num_obs, bounds, hidden_dims=(256,256), device=torch.device("cuda")),
@@ -508,11 +510,12 @@ if __name__ == '__main__':
     # with open('save_models/maddpg_spread.results', 'wb') as file:
     #    pickle.dump(results, file)
 
-    # reference
-    from pettingzoo.mpe import simple_reference_v3
+    # env = simple_reference_v3.parallel_env(render_mode="rgb_array", continuous_actions=True)
+    # env.scenario_name = "simple_reference"
 
-    env = simple_reference_v3.parallel_env(render_mode="rgb_array", continuous_actions=True)
-    env.scenario_name = "simple_reference"
+    env = simple_adversary_v3.parallel_env(max_cycles=75, render_mode="rgb_array", continuous_actions=True)
+    env.scenario_name = "simple_adversary"
+
     maddpg = MADDPG(agent_fn=lambda agent: MADDPGAgent(
         policy_model_fn=lambda num_obs, bounds: FCDP(num_obs, bounds, hidden_dims=(256, 256),
                                                      device=torch.device("cuda")),
@@ -530,7 +533,7 @@ if __name__ == '__main__':
                                                              batch_size=512,
                                                              save_models=[1, 50, 100, 500, 1000, 2000, 5000])
     results = {'episode_returns': episode_returns, 'best_model': best_model, 'saved_models': saved_models}
-    import pickle
+    plot_training_history(episode_returns, save=True, filename=env.scenario_name)
 
-    with open('save_models/maddpg_reference1.results', 'wb') as file:
+    with open(f'save_models/maddpg_{env.scenario_name}.results', 'wb') as file:
         pickle.dump(results, file)

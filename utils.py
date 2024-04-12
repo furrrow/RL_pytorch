@@ -24,22 +24,25 @@ def read_yaml(file_path):
         return yaml.safe_load(f)
 
 
-def plot_training_history(rewards_array: np.array, save: bool = False, labels: list = None, filename="history"):
+def plot_training_history(rewards_dict: dict, avg_len=20, save: bool = False, filename="history"):
     fig = plt.figure()
-    rolling_history = []
-    if labels is None:
-        labels = ['rewards', '100 episode rolling avg']
-    for t in range(len(rewards_array)):
-        subsection = rewards_array[:t + 1]
-        rolling_history.append(np.average(subsection[-100:]))
     plt.style.use('seaborn-v0_8')
-    plt.plot(rewards_array, alpha=0.5, label=labels[0])
-    plt.plot(np.array(rolling_history), label=labels[1])
+    plt.rcParams.update({'font.size': 30})
+    save_dict = rewards_dict.copy()
+    for key in rewards_dict:
+        rewards_array = rewards_dict[key]
+        new_key = f"{key}_rolling_avg"
+        rolling_history = []
+        for t in range(len(rewards_array)):
+            subsection = rewards_array[:t + 1]
+            rolling_history.append(np.average(subsection[-avg_len:]))
+        save_dict[new_key] = rolling_history
+        plt.scatter(np.arange(len(rewards_array)), rewards_array, alpha=0.1, label=key)
+        plt.plot(np.array(rolling_history), label=new_key, linestyle="-.")
     plt.legend()
     if save:
         plt.savefig(f"{filename}.png")
-        np.savetxt(f"{filename}.csv", rewards_array, delimiter=",")
-
+        np.save(f"{filename}.npy", save_dict)
     plt.show()
 
 
