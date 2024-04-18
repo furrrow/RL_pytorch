@@ -246,7 +246,7 @@ class A2C:
         self.optimizer.step()
 
     def interaction_step(self, states):
-        actions, log_pas, entropies, values = self.model.choose_action_nograd(states)
+        actions, log_pas, entropies, values = self.model.choose_action(states)
         new_states, rewards, is_terminals, truncateds, infos = self.envs.step(actions)
         self.logpas.append(log_pas)
         self.rewards.append(rewards)
@@ -303,7 +303,7 @@ if __name__ == '__main__':
     MAX_N_STEPS = 1000
     EPOCHS = 2000
     # n_workers = mp.cpu_count()-1
-    n_workers = 12
+    n_workers = 2
     actor_critic = A2CNet(n_states, n_action)
     # optimizer = torch.optim.Adam(actor_critic.parameters(), lr=LR)
     optimizer = torch.optim.RMSprop(actor_critic.parameters(), lr=LR)

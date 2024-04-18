@@ -308,11 +308,12 @@ class EpisodeBuffer:
         self.gaes_mem = np.empty(shape=(self.max_episodes, self.max_episode_steps), dtype=np.float32)
         self.logpas_mem = np.empty(shape=(self.max_episodes, self.max_episode_steps), dtype=np.float32)
 
-        self.episode_steps = np.zeros(shape=(self.max_episodes), dtype=np.uint16)
-        self.episode_reward = np.zeros(shape=(self.max_episodes), dtype=np.float32)
-        self.episode_exploration = np.zeros(shape=(self.max_episodes), dtype=np.float32)
-        self.episode_seconds = np.zeros(shape=(self.max_episodes), dtype=np.float64)
+        self.episode_steps = np.zeros(shape=self.max_episodes, dtype=np.uint16)
+        self.episode_reward = np.zeros(shape=self.max_episodes, dtype=np.float32)
+        self.episode_exploration = np.zeros(shape=self.max_episodes, dtype=np.float32)
+        self.episode_seconds = np.zeros(shape=self.max_episodes, dtype=np.float64)
         self.current_ep_idxs = np.arange(self.n_workers, dtype=np.uint16)
+        self.clear()
 
         self.discounts = np.logspace(
             0, max_episode_steps + 1, num=max_episode_steps + 1, base=gamma, endpoint=False, dtype=np.float128)
@@ -323,28 +324,33 @@ class EpisodeBuffer:
         self.clear()
 
     def clear(self):
+        self.states_mem = np.empty(
+            shape=(self.max_episodes, self.max_episode_steps, self.state_dim), dtype=np.float64)
+        self.actions_mem = np.empty(shape=(self.max_episodes, self.max_episode_steps), dtype=np.uint8)
+        self.returns_mem = np.empty(shape=(self.max_episodes, self.max_episode_steps), dtype=np.float32)
+        self.gaes_mem = np.empty(shape=(self.max_episodes, self.max_episode_steps), dtype=np.float32)
+        self.logpas_mem = np.empty(shape=(self.max_episodes, self.max_episode_steps), dtype=np.float32)
 
+        self.episode_steps = np.zeros(shape=self.max_episodes, dtype=np.uint16)
+        self.episode_reward = np.zeros(shape=self.max_episodes, dtype=np.float32)
+        self.episode_exploration = np.zeros(shape=self.max_episodes, dtype=np.float32)
+        self.episode_seconds = np.zeros(shape=self.max_episodes, dtype=np.float64)
+        self.current_ep_idxs = np.arange(self.n_workers, dtype=np.uint16)
         self.states_mem[:] = 0
         self.actions_mem[:] = 0
         self.returns_mem[:] = 0
         self.gaes_mem[:] = 0
         self.logpas_mem[:] = 0
-
-        self.episode_steps[:] = 0
-        self.episode_reward[:] = 0
-        self.episode_exploration[:] = 0
-        self.episode_seconds[:] = 0
-        self.current_ep_idxs = np.arange(self.n_workers, dtype=np.uint16)
         gc.collect()
 
-    def fill(self, envs, policy_model, value_model):
+    def fill(self, policy_model, value_model):
         states, infos = self.envs.reset()
-        idx_terminals = None
+        idx_resets = None
         next_values = None
 
         worker_rewards = np.zeros(shape=(self.n_workers, self.max_episode_steps), dtype=np.float32)
         worker_exploratory = np.zeros(shape=(self.n_workers, self.max_episode_steps), dtype=np.bool_)
-        worker_steps = np.zeros(shape=(self.n_workers), dtype=np.uint16)
+        worker_steps = np.zeros(shape=self.n_workers, dtype=np.uint16)
         worker_seconds = np.array([time.time(), ] * self.n_workers, dtype=np.float64)
 
         buffer_full = False
@@ -363,29 +369,31 @@ class EpisodeBuffer:
 
             for w_idx in range(self.n_workers):
                 if worker_steps[w_idx] + 1 == self.max_episode_steps:
-                    terminals[w_idx] = 1
-                    truncateds[w_idx] = 1
+                    # terminals[w_idx] = 1
+                    truncateds[w_idx] = True
 
-            if terminals.sum():
-                idx_terminals = np.flatnonzero(terminals)
-                idx_non_terminals = np.flatnonzero(1 - terminals)
-                next_values = np.zeros(shape=(self.n_workers))
-                idx_truncated = np.flatnonzero(truncateds)
-                # we bootstrap next values for truncated or non-terminal states
-                with torch.no_grad():
-                    for idx in idx_non_terminals:
-                        next_values[idx] = value_model(
-                            next_states[idx]).cpu().numpy()
+            terminal_or_truncated = np.logical_or(terminals, truncateds)
+            if True in terminal_or_truncated:
+                idx_resets = np.flatnonzero(terminal_or_truncated)
+                next_values = np.zeros(shape=self.n_workers)
+                if True in truncateds:
+                    # we bootstrap next values for truncated or non-terminal states
+                    idx_truncated = np.flatnonzero(truncateds)
+                    with torch.no_grad():
+                        next_values[idx_truncated] = value_model(next_states[idx_truncated]).squeeze().cpu().numpy()
 
             states = next_states
             worker_steps += 1
 
-            if terminals.sum():
-                new_states = self.envs.reset()
-                # states[idx_terminals] = new_states
+            # process the workers if we have terminals
+            if terminal_or_truncated.sum():
+                new_states, infos = self.envs.reset(ranks=idx_resets)
+                states[idx_resets] = new_states
 
                 # process each terminal worker at a time:
                 for w_idx in range(self.n_workers):
+                    if w_idx not in idx_resets:
+                        continue
 
                     e_idx = self.current_ep_idxs[w_idx]
                     T = worker_steps[w_idx]
@@ -394,26 +402,28 @@ class EpisodeBuffer:
                     self.episode_exploration[e_idx] = worker_exploratory[w_idx, :T].mean()
                     self.episode_seconds[e_idx] = time.time() - worker_seconds[w_idx]
 
-                    ep_rewards = np.concatenate(
-                        (worker_rewards[w_idx, :T], [next_values[w_idx]]))
+                    # append the bootstrapping value to reward vector, calculate predicted returns
+                    ep_rewards = np.concatenate((worker_rewards[w_idx, :T], [next_values[w_idx]]))
                     ep_discounts = self.discounts[:T + 1]
                     ep_returns = np.array(
                         [np.sum(ep_discounts[:T + 1 - t] * ep_rewards[t:]) for t in range(T)])
                     self.returns_mem[e_idx, :T] = ep_returns
 
                     ep_states = self.states_mem[e_idx, :T]
+                    # get the predicted values, append the bootstrapping value to the vector
                     with torch.no_grad():
-                        ep_values = torch.cat((value_model(ep_states),
+                        ep_values = torch.cat((value_model(ep_states).squeeze(),
                                                torch.tensor([next_values[w_idx]],
                                                             device=value_model.device,
                                                             dtype=torch.float32)))
                     np_ep_values = ep_values.view(-1).cpu().numpy()
                     ep_tau_discounts = self.tau_discounts[:T]
                     deltas = ep_rewards[:-1] + self.gamma * np_ep_values[1:] - np_ep_values[:-1]
+                    # calculate the generalized advantage estimators, save to buffer
                     gaes = np.array(
                         [np.sum(self.tau_discounts[:T - t] * deltas[t:]) for t in range(T)])
                     self.gaes_mem[e_idx, :T] = gaes
-
+                    # reset and prepare for next episode
                     worker_exploratory[w_idx, :] = 0
                     worker_rewards[w_idx, :] = 0
                     worker_steps[w_idx] = 0
@@ -423,13 +433,13 @@ class EpisodeBuffer:
                     if new_ep_id >= self.max_episodes:
                         buffer_full = True
                         break
-
+                    # go to next episode if buffer is not full
                     self.current_ep_idxs[w_idx] = new_ep_id
 
         # episode is full:
         ep_idxs = self.episode_steps > 0
         ep_t = self.episode_steps[ep_idxs]
-
+        # remove from memory everything that isn't a number
         self.states_mem = [row[:ep_t[i]] for i, row in enumerate(self.states_mem[ep_idxs])]
         self.states_mem = np.concatenate(self.states_mem)
         self.actions_mem = [row[:ep_t[i]] for i, row in enumerate(self.actions_mem[ep_idxs])]
@@ -443,7 +453,7 @@ class EpisodeBuffer:
         self.logpas_mem = [row[:ep_t[i]] for i, row in enumerate(self.logpas_mem[ep_idxs])]
         self.logpas_mem = torch.tensor(np.concatenate(self.logpas_mem),
                                        device=value_model.device)
-
+        # statistics
         ep_r = self.episode_reward[ep_idxs]
         ep_x = self.episode_exploration[ep_idxs]
         ep_s = self.episode_seconds[ep_idxs]

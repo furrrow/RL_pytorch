@@ -18,6 +18,8 @@ https://github.com/mimoralea/gdrl/blob/master/notebooks/chapter_11/chapter-11.ip
 the code still has a hard time being trained properly, thus cannot rule out the possibility of a bug
 however, A3C has known to be brittle to hyperparameters.
 alternatively, I could use entirely different neural networks for both policy and value models (like miguel's notebook)
+
+TODO: this gets stuck on neural network's forward function, unknown why
 """
 
 
@@ -51,7 +53,7 @@ class SharedAdam(torch.optim.Adam):
 # miguel has an image based version, I need to start with a state based one...
 class ActorCritic(nn.Module):
 
-    def __init__(self, input_dim, n_actions, gamma=0.99, entropy_loss_weight=0.001):
+    def __init__(self, input_dim, n_actions, gamma=0.99, entropy_loss_weight=0.001, device="cpu"):
         super(ActorCritic, self).__init__()
         self.states = []
         self.actions = []
@@ -144,7 +146,7 @@ class ActorCritic(nn.Module):
         value_error = returns - values
         policy_loss = -(self.logpas * value_error.detach()).mean()
         entropy_loss = -self.entropies.mean()
-        policy_loss = policy_loss * self.entropy_loss_weight*entropy_loss
+        policy_loss = policy_loss * self.entropy_loss_weight * entropy_loss
         value_loss = value_error.pow(2).mul(0.5).mean()
         total_loss = policy_loss + value_loss
 
@@ -164,19 +166,22 @@ class ActorCritic(nn.Module):
 
 
 class Agent(mp.Process):
-    def __init__(self, global_actor_critic, optimizer, input_dims, n_actions,
-                 entropy_loss_weight, gamma, name,global_episode_index, env_id):
+    def __init__(self, global_actor_critic, optimizer, input_dims, n_actions, entropy_loss_weight, gamma, name,
+                 global_episode_index, env_id, device, n_games, t_max):
         super(Agent, self).__init__()
-        self.local_actor_critic = ActorCritic(input_dims, n_actions, gamma, entropy_loss_weight)
+        self.local_actor_critic = ActorCritic(input_dims, n_actions, gamma, entropy_loss_weight, device)
         self.global_actor_critic = global_actor_critic
+        self.optimizer = optimizer
         self.name = f"worker{name:2}"
         self.episode_index = global_episode_index
         self.env = gym.make(env_id)
-        self.optimizer = optimizer
+        self.n_games = n_games
+        self.t_max = t_max
 
     def run(self):
         t_step = 1
-        while self.episode_index.value < N_GAMES:
+        while self.episode_index.value < self.n_games:
+            print(self.name, ", step", t_step)
             terminated = False
             truncated = False
             observation, info = self.env.reset()
@@ -185,9 +190,10 @@ class Agent(mp.Process):
             while not (terminated or truncated):
                 action, log_pa, entropy = self.local_actor_critic.choose_action(observation)
                 observation_new, reward, terminated, truncated, info = self.env.step(action)
+                print(reward)
                 score += reward
                 self.local_actor_critic.remember(observation, action, reward, log_pa, entropy)
-                if t_step % T_MAX == 0 or (terminated or truncated):
+                if t_step % self.t_max == 0 or (terminated or truncated):
                     self.local_actor_critic.consolidate_memory()
                     loss = self.local_actor_critic.calculate_loss(terminated)
                     self.optimizer.zero_grad()
@@ -212,7 +218,7 @@ class Agent(mp.Process):
 
 if __name__ == '__main__':
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = "cpu"
+    device = "cpu"  # GPU doesn't work yet
     print("using", device)
     LR = 0.0001
     entropy_loss_weight = 0.001
@@ -223,8 +229,9 @@ if __name__ == '__main__':
     N_GAMES = 3000
     T_MAX = 5
     # n_workers = mp.cpu_count()-1
-    n_workers = 8
-    global_actor_critic = ActorCritic(n_states, n_action, entropy_loss_weight)
+    n_workers = 2
+    global_actor_critic = ActorCritic(n_states, n_action,
+                                      entropy_loss_weight=entropy_loss_weight, device=device)
     global_actor_critic.share_memory()
     optim = SharedAdam(global_actor_critic.parameters(), lr=LR, betas=(0.92, 0.999))
     global_ep = mp.Value("i", 0)
@@ -234,7 +241,8 @@ if __name__ == '__main__':
         workers.append(
             Agent(global_actor_critic, optim, n_states, n_action,
                   entropy_loss_weight=entropy_loss_weight, gamma=1.00, name=i,
-                  global_episode_index=global_ep, env_id=env_id))
+                  global_episode_index=global_ep, env_id=env_id, device=device,
+                  n_games=N_GAMES, t_max=T_MAX))
 
     [w.start() for w in workers]
     [w.join() for w in workers]
