@@ -199,7 +199,7 @@ class PPO:
                  n_envs,
                  device="cpu"):
 
-        assert n_envs > 1
+        # assert n_envs > 1
         self.lr = LR
         self.env_id = env_id
         self.batch_size = batch_size
@@ -352,7 +352,7 @@ if __name__ == '__main__':
     env.close()
     update_interval = 5
     EPOCHS = 300
-    n_workers = 2
+    n_workers = 1
     max_episodes = 16
     max_episode_steps = 1000  # truncated step set by env will take precedence
     agent = PPO(env_id, LR, BATCH_SIZE, update_interval, tau, gamma, max_episodes, max_episode_steps, n_workers)

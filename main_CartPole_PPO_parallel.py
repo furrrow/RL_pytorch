@@ -3,10 +3,9 @@ import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.multiprocessing as mp
+from utils import plot_training_history
 import numpy as np
 import gymnasium as gym
-from replay_buffer import NumpyReplayBuffer, EpisodeBuffer
 
 """ PPO code implementation using pettingzoo's parallel environments
 heavily referencing:
@@ -111,6 +110,7 @@ class EpisodeBuffer:
     """
     WARNING, does not work yet with the vectorized env of the gymnasium.vector.VectorEnv
     """
+
     def __init__(self,
                  state_dim,
                  gamma,
@@ -197,12 +197,10 @@ class EpisodeBuffer:
 
             for w_idx in range(self.n_workers):
                 if worker_steps[w_idx] + 1 == self.max_episode_steps:
-                    # terminals[w_idx] = 1
                     truncateds[w_idx] = True
 
             terminal_or_truncated = np.logical_or(terminals, truncateds)
             if True in terminal_or_truncated:
-                idx_resets = np.flatnonzero(terminal_or_truncated)
                 next_values = np.zeros(shape=self.n_workers)
                 if True in truncateds:
                     # we bootstrap next values for truncated or non-terminal states
@@ -215,9 +213,9 @@ class EpisodeBuffer:
 
             # process the workers if we have terminals
             if terminal_or_truncated.sum():
-                # NOTE: currently doesn't support resetting by rank, reset all instead
-                new_states, infos = self.envs.reset()
-                states = new_states
+                # NOTE: gymnasium parallel envs reset themselves, unsure how this affects training
+                # new_states, infos = self.envs.reset()
+                # states = new_states
 
                 # process each terminal worker at a time:
                 for w_idx in range(self.n_workers):
@@ -238,10 +236,13 @@ class EpisodeBuffer:
                     ep_states = self.states_mem[e_idx, :T]
                     # get the predicted values, append the bootstrapping value to the vector
                     with torch.no_grad():
-                        ep_values = torch.cat((value_model(ep_states).squeeze(),
-                                               torch.tensor([next_values[w_idx]],
-                                                            device=value_model.device,
-                                                            dtype=torch.float32)))
+                        value_net_out = value_model(ep_states)
+                        if len(value_net_out.shape) > 1:
+                            value_net_out = value_net_out.squeeze(-1)
+                        ep_values = torch.cat((
+                            value_net_out,
+                            torch.tensor([next_values[w_idx]], device=value_model.device, dtype=torch.float32)
+                        ))
                     np_ep_values = ep_values.view(-1).cpu().numpy()
                     ep_tau_discounts = self.tau_discounts[:T]
                     deltas = ep_rewards[:-1] + self.gamma * np_ep_values[1:] - np_ep_values[:-1]
@@ -306,7 +307,7 @@ class PPO:
                  n_envs,
                  device="cpu"):
 
-        assert n_envs > 1
+        # assert n_envs > 1
         self.lr = LR
         self.env_id = env_id
         self.batch_size = batch_size
@@ -319,14 +320,18 @@ class PPO:
         self.n_workers = n_envs
         self.device = device
         self.envs = gym.vector.make(env_id, num_envs=n_envs)
-        self.n_states = self.envs.single_observation_space.shape[0]
-        self.n_action = self.envs.single_action_space.n
-        self.bounds = (self.envs.single_action_space.start, self.n_action - 1)
+        self.envs = gym.wrappers.RecordEpisodeStatistics(self.envs, deque_size=self.n_envs * self.max_episodes * 10)
+        # self.n_states = self.envs.single_observation_space.shape[0]
+        self.n_states = self.envs.get_wrapper_attr('single_observation_space').shape[0]
+        # self.n_action = self.envs.single_action_space.n
+        self.n_action = self.envs.get_wrapper_attr('single_action_space').n
+        self.bounds = (self.envs.get_wrapper_attr('single_action_space').start, self.n_action - 1)
         # self.envs = MultiprocessEnv(env_id, n_envs)
 
         self.episode_timestep, self.episode_reward = [], []
         self.episode_seconds, self.episode_exploration = [], []
         self.evaluation_scores = []
+        self.rewards_history = None
 
         self.policy_model = FCCA(self.n_states, self.n_action, device=self.device)
         self.policy_optimizer = torch.optim.Adam(self.policy_model.parameters(), self.lr)
@@ -436,6 +441,9 @@ class PPO:
             print(f"episode {episode} avg rwd {np.average(episode_reward):.1f}; reward {episode_reward} ")
 
         print('Training complete.')
+
+        returns_list = self.envs.return_queue
+        self.rewards_history = {env_id: np.array(returns_list)}
         self.envs.close()
         del self.envs
         return result
@@ -456,10 +464,10 @@ if __name__ == '__main__':
     bounds = (env.action_space.start, n_action - 1)
     env.close()
     update_interval = 5
-    EPOCHS = 300
-    n_workers = 2
+    EPOCHS = 100
+    n_workers = 3
     max_episodes = 16
     max_episode_steps = 1000  # truncated step set by env will take precedence
     agent = PPO(env_id, LR, BATCH_SIZE, update_interval, tau, gamma, max_episodes, max_episode_steps, n_workers)
     agent.train(EPOCHS)
-    # plot_training_history(agent.rewards_history, save=False)
+    plot_training_history(agent.rewards_history, save=False)
