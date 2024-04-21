@@ -372,8 +372,8 @@ class PPO:
             logpas_pred, entropies_pred = self.policy_model.get_predictions(states_batch,
                                                                             actions_batch)
             # log probabilities to ratio of probabilities
-            ratios = (logpas_pred - logpas_batch).exp()  # [batch]
-            pi_obj = gaes_batch * ratios  # [batch]
+            ratios = (logpas_pred - logpas_batch).exp()
+            pi_obj = gaes_batch * ratios
             pi_obj_clipped = gaes_batch * ratios.clamp(1.0 - self.policy_clip_range,
                                                        1.0 + self.policy_clip_range)
             policy_loss = -torch.min(pi_obj, pi_obj_clipped).mean()
@@ -456,10 +456,10 @@ if __name__ == '__main__':
     LR = 0.0005
     tau = 0.97
     gamma = 1.0
-    env_id = "CartPole-v1"
+    env_id = "LunarLander-v2"
     update_interval = 5
     EPOCHS = 100
-    n_workers = 3
+    n_workers = 8
     max_episodes = 16
     max_episode_steps = 1000  # truncated step set by env will take precedence
     agent = PPO(env_id, LR, BATCH_SIZE, update_interval, tau, gamma, max_episodes, max_episode_steps, n_workers)

@@ -9,9 +9,12 @@ dependencies:
   - numpy
   - matplotlib
   - gymnasium
+  - gymnasium[box2d]
   - tqdm
   - pip
   - pyyaml
   - moviepy
   - pip:
     - pettingzoo[mpe]
+    - swig
+    - box2d-py
