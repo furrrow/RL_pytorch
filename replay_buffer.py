@@ -280,8 +280,7 @@ class MultiAgentNumpyBuffer:
 
 
 class EpisodeBuffer:
-    """
-    WARNING, does not work yet with the vectorized env of the gymnasium.vector.VectorEnv
+    """ Episode Buffer
     """
     def __init__(self,
                  state_dim,
@@ -373,8 +372,8 @@ class EpisodeBuffer:
                     truncateds[w_idx] = True
 
             terminal_or_truncated = np.logical_or(terminals, truncateds)
+            idx_resets = np.flatnonzero(terminal_or_truncated)
             if True in terminal_or_truncated:
-                idx_resets = np.flatnonzero(terminal_or_truncated)
                 next_values = np.zeros(shape=self.n_workers)
                 if True in truncateds:
                     # we bootstrap next values for truncated or non-terminal states

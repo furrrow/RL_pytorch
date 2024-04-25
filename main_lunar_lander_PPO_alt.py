@@ -182,176 +182,65 @@ class EpisodeBuffer:
         self.logpas_mem[self.current_ep_idxs, self.worker_steps] = logpas
         self.worker_rewards[np.arange(self.n_workers), self.worker_steps] = rewards
 
-        for w_idx in range(self.n_workers):
-            if self.worker_steps[w_idx] + 1 == self.max_episode_steps:
-                truncateds[w_idx] = True
-
     def process_terminals(self, terminals, truncateds, value_model, next_states):
         terminal_or_truncated = np.logical_or(terminals, truncateds)
+        idx_resets = np.flatnonzero(terminal_or_truncated)
         next_values = np.zeros(shape=self.n_workers)
         if True in truncateds:
             # we bootstrap next values for truncated or non-terminal states
             idx_truncated = np.flatnonzero(truncateds)
             with torch.no_grad():
                 next_values[idx_truncated] = value_model(next_states[idx_truncated]).squeeze().cpu().numpy()
-        if terminal_or_truncated.sum():
-            # process each terminal worker at a time:
-            for w_idx in range(self.n_workers):
-                e_idx = self.current_ep_idxs[w_idx]
-                T = self.worker_steps[w_idx]
-                self.episode_steps[e_idx] = T
-                self.episode_reward[e_idx] = self.worker_rewards[w_idx, :T].sum()
-                self.episode_exploration[e_idx] = self.worker_exploratory[w_idx, :T].mean()
 
-                # append the bootstrapping value to reward vector, calculate predicted returns
-                ep_rewards = np.concatenate((self.worker_rewards[w_idx, :T], [next_values[w_idx]]))
-                ep_discounts = self.discounts[:T + 1]
-                ep_returns = np.array(
-                    [np.sum(ep_discounts[:T + 1 - t] * ep_rewards[t:]) for t in range(T)])
-                self.returns_mem[e_idx, :T] = ep_returns
+        # if terminal_or_truncated.sum():
+        # process each terminal worker at a time:
+        for w_idx in range(self.n_workers):
+            if w_idx not in idx_resets:
+                continue
 
-                ep_states = self.states_mem[e_idx, :T]
-                # get the predicted values, append the bootstrapping value to the vector
-                with torch.no_grad():
-                    value_net_out = value_model(ep_states)
-                    if len(value_net_out.shape) > 1:
-                        value_net_out = value_net_out.squeeze(-1)
-                    ep_values = torch.cat((
-                        value_net_out,
-                        torch.tensor([next_values[w_idx]], device=value_model.device, dtype=torch.float32)
-                    ))
-                np_ep_values = ep_values.view(-1).cpu().numpy()
-                ep_tau_discounts = self.tau_discounts[:T]
-                deltas = ep_rewards[:-1] + self.gamma * np_ep_values[1:] - np_ep_values[:-1]
-                # calculate the generalized advantage estimators, save to buffer
-                gaes = np.array(
-                    [np.sum(self.tau_discounts[:T - t] * deltas[t:]) for t in range(T)])
-                self.gaes_mem[e_idx, :T] = gaes
-                # reset and prepare for next episode
-                self.worker_exploratory[w_idx, :] = 0
-                self.worker_rewards[w_idx, :] = 0
-                self.worker_steps[w_idx] = 0
+            e_idx = self.current_ep_idxs[w_idx]
+            T = self.worker_steps[w_idx]
+            self.episode_steps[e_idx] = T
+            self.episode_reward[e_idx] = self.worker_rewards[w_idx, :T].sum()
+            self.episode_exploration[e_idx] = self.worker_exploratory[w_idx, :T].mean()
 
-                new_ep_id = max(self.current_ep_idxs) + 1
-                if new_ep_id >= self.max_episodes:
-                    self.buffer_full = True
-                    break
-                # go to next episode if buffer is not full
-                self.current_ep_idxs[w_idx] = new_ep_id
+            # append the bootstrapping value to reward vector, calculate predicted returns
+            ep_rewards = np.concatenate((self.worker_rewards[w_idx, :T], [next_values[w_idx]]))
+            ep_discounts = self.discounts[:T + 1]
+            ep_returns = np.array(
+                [np.sum(ep_discounts[:T + 1 - t] * ep_rewards[t:]) for t in range(T)])
+            self.returns_mem[e_idx, :T] = ep_returns
+
+            ep_states = self.states_mem[e_idx, :T]
+            # get the predicted values, append the bootstrapping value to the vector
+            with torch.no_grad():
+                value_net_out = value_model(ep_states)
+                if len(value_net_out.shape) > 1:
+                    value_net_out = value_net_out.squeeze(-1)
+                ep_values = torch.cat((
+                    value_net_out,
+                    torch.tensor([next_values[w_idx]], device=value_model.device, dtype=torch.float32)
+                ))
+            np_ep_values = ep_values.view(-1).cpu().numpy()
+            ep_tau_discounts = self.tau_discounts[:T]
+            deltas = ep_rewards[:-1] + self.gamma * np_ep_values[1:] - np_ep_values[:-1]
+            # calculate the generalized advantage estimators, save to buffer
+            gaes = np.array(
+                [np.sum(self.tau_discounts[:T - t] * deltas[t:]) for t in range(T)])
+            self.gaes_mem[e_idx, :T] = gaes
+            # reset and prepare for next episode
+            self.worker_exploratory[w_idx, :] = 0
+            self.worker_rewards[w_idx, :] = 0
+            self.worker_steps[w_idx] = 0
+
+            new_ep_id = max(self.current_ep_idxs) + 1
+            if new_ep_id >= self.max_episodes:
+                self.buffer_full = True
+                break
+            # go to next episode if buffer is not full
+            self.current_ep_idxs[w_idx] = new_ep_id
 
     def process_episode_full(self, value_model):
-        # episode is full:
-        ep_idxs = self.episode_steps > 0
-        ep_t = self.episode_steps[ep_idxs]
-        # remove from memory everything that isn't a number
-        self.states_mem = [row[:ep_t[i]] for i, row in enumerate(self.states_mem[ep_idxs])]
-        self.states_mem = np.concatenate(self.states_mem)
-        self.actions_mem = [row[:ep_t[i]] for i, row in enumerate(self.actions_mem[ep_idxs])]
-        self.actions_mem = np.concatenate(self.actions_mem)
-        self.returns_mem = [row[:ep_t[i]] for i, row in enumerate(self.returns_mem[ep_idxs])]
-        self.returns_mem = torch.tensor(np.concatenate(self.returns_mem),
-                                        device=value_model.device)
-        self.gaes_mem = [row[:ep_t[i]] for i, row in enumerate(self.gaes_mem[ep_idxs])]
-        self.gaes_mem = torch.tensor(np.concatenate(self.gaes_mem),
-                                     device=value_model.device)
-        self.logpas_mem = [row[:ep_t[i]] for i, row in enumerate(self.logpas_mem[ep_idxs])]
-        self.logpas_mem = torch.tensor(np.concatenate(self.logpas_mem),
-                                       device=value_model.device)
-        # statistics
-        ep_r = self.episode_reward[ep_idxs]
-        ep_x = self.episode_exploration[ep_idxs]
-        ep_s = self.episode_seconds[ep_idxs]
-        return ep_t, ep_r, ep_x, ep_s
-
-    def fill(self, policy_model, value_model):
-        states, infos = self.envs.reset()
-        idx_resets = None
-        next_values = None
-
-        worker_rewards = np.zeros(shape=(self.n_workers, self.max_episode_steps), dtype=np.float32)
-        worker_exploratory = np.zeros(shape=(self.n_workers, self.max_episode_steps), dtype=np.bool_)
-        worker_steps = np.zeros(shape=self.n_workers, dtype=np.uint16)
-
-        self.buffer_full = False
-        while not self.buffer_full and len(self.episode_steps[self.episode_steps > 0]) < self.max_episodes / 2:
-            with torch.no_grad():
-                actions, logpas, are_exploratory = policy_model.np_pass(states)
-                values = value_model(states)
-
-            next_states, rewards, terminals, truncateds, infos = self.envs.step(actions)
-            self.states_mem[self.current_ep_idxs, worker_steps] = states
-            self.actions_mem[self.current_ep_idxs, worker_steps] = actions
-            self.logpas_mem[self.current_ep_idxs, worker_steps] = logpas
-
-            worker_exploratory[np.arange(self.n_workers), worker_steps] = are_exploratory
-            worker_rewards[np.arange(self.n_workers), worker_steps] = rewards
-
-            for w_idx in range(self.n_workers):
-                if worker_steps[w_idx] + 1 == self.max_episode_steps:
-                    truncateds[w_idx] = True
-
-            terminal_or_truncated = np.logical_or(terminals, truncateds)
-            if True in terminal_or_truncated:
-                next_values = np.zeros(shape=self.n_workers)
-                if True in truncateds:
-                    # we bootstrap next values for truncated or non-terminal states
-                    idx_truncated = np.flatnonzero(truncateds)
-                    with torch.no_grad():
-                        next_values[idx_truncated] = value_model(next_states[idx_truncated]).squeeze().cpu().numpy()
-
-            states = next_states
-            worker_steps += 1
-
-            # process the workers if we have terminals
-            if terminal_or_truncated.sum():
-                # NOTE: gymnasium parallel envs reset themselves, unsure how this affects training
-                # new_states, infos = self.envs.reset()
-                # states = new_states
-
-                # process each terminal worker at a time:
-                for w_idx in range(self.n_workers):
-                    e_idx = self.current_ep_idxs[w_idx]
-                    T = worker_steps[w_idx]
-                    self.episode_steps[e_idx] = T
-                    self.episode_reward[e_idx] = worker_rewards[w_idx, :T].sum()
-                    self.episode_exploration[e_idx] = worker_exploratory[w_idx, :T].mean()
-
-                    # append the bootstrapping value to reward vector, calculate predicted returns
-                    ep_rewards = np.concatenate((worker_rewards[w_idx, :T], [next_values[w_idx]]))
-                    ep_discounts = self.discounts[:T + 1]
-                    ep_returns = np.array(
-                        [np.sum(ep_discounts[:T + 1 - t] * ep_rewards[t:]) for t in range(T)])
-                    self.returns_mem[e_idx, :T] = ep_returns
-
-                    ep_states = self.states_mem[e_idx, :T]
-                    # get the predicted values, append the bootstrapping value to the vector
-                    with torch.no_grad():
-                        value_net_out = value_model(ep_states)
-                        if len(value_net_out.shape) > 1:
-                            value_net_out = value_net_out.squeeze(-1)
-                        ep_values = torch.cat((
-                            value_net_out,
-                            torch.tensor([next_values[w_idx]], device=value_model.device, dtype=torch.float32)
-                        ))
-                    np_ep_values = ep_values.view(-1).cpu().numpy()
-                    ep_tau_discounts = self.tau_discounts[:T]
-                    deltas = ep_rewards[:-1] + self.gamma * np_ep_values[1:] - np_ep_values[:-1]
-                    # calculate the generalized advantage estimators, save to buffer
-                    gaes = np.array(
-                        [np.sum(self.tau_discounts[:T - t] * deltas[t:]) for t in range(T)])
-                    self.gaes_mem[e_idx, :T] = gaes
-                    # reset and prepare for next episode
-                    worker_exploratory[w_idx, :] = 0
-                    worker_rewards[w_idx, :] = 0
-                    worker_steps[w_idx] = 0
-
-                    new_ep_id = max(self.current_ep_idxs) + 1
-                    if new_ep_id >= self.max_episodes:
-                        self.buffer_full = True
-                        break
-                    # go to next episode if buffer is not full
-                    self.current_ep_idxs[w_idx] = new_ep_id
-
         # episode is full:
         ep_idxs = self.episode_steps > 0
         ep_t = self.episode_steps[ep_idxs]
@@ -387,8 +276,6 @@ class PPO:
     def __init__(self,
                  env_id,
                  LR,
-                 batch_size,
-                 update_interval,
                  tau,
                  gamma,
                  max_episodes,
@@ -398,8 +285,6 @@ class PPO:
 
         self.lr = LR
         self.env_id = env_id
-        self.batch_size = batch_size
-        self.update_interval = update_interval
         self.tau = tau
         self.gamma = gamma
         self.max_episodes = max_episodes
@@ -407,7 +292,9 @@ class PPO:
         self.n_envs = n_envs
         self.n_workers = n_envs
         self.device = device
+        self.eval_history = None
         self.envs = gym.vector.make(env_id, num_envs=n_envs)
+        self.eval_env = gym.make(self.env_id)
         self.n_states = self.envs.single_observation_space.shape[0]
         self.n_action = self.envs.single_action_space.n
         # self.envs = MultiprocessEnv(env_id, n_envs)
@@ -425,7 +312,6 @@ class PPO:
 
         self.episode_buffer = EpisodeBuffer(self.n_states, self.gamma, self.tau, self.n_workers,
                                             self.max_episodes, self.max_episode_steps)
-        self.policy_optimizer_lr = 0.0003
         self.policy_optimization_epochs = 80
         self.policy_sample_ratio = 0.8
         self.policy_clip_range = 0.1
@@ -439,6 +325,7 @@ class PPO:
         self.value_clip_range = float('inf')
 
         self.EPS = 1e-6
+        self.eval_interval = 5
 
     def optimize_model(self):
         states, actions, returns, gaes, logpas = self.episode_buffer.get_stacks()
@@ -468,6 +355,7 @@ class PPO:
 
             self.policy_optimizer.zero_grad()
             (policy_loss + entropy_loss).backward()
+            # print("policy_loss", policy_loss)
             torch.nn.utils.clip_grad_norm_(self.policy_model.parameters(),
                                            self.policy_model_max_grad_norm)
             self.policy_optimizer.step()
@@ -495,6 +383,7 @@ class PPO:
 
             self.value_optimizer.zero_grad()
             value_loss.backward()
+            # print("value_loss", value_loss)
             torch.nn.utils.clip_grad_norm_(self.value_model.parameters(),
                                            self.value_model_max_grad_norm)
             self.value_optimizer.step()
@@ -509,29 +398,38 @@ class PPO:
     def train(self, max_episodes):
         result = np.empty((max_episodes, 5))
         result[:] = np.nan
-        training_time = 0
-        states, infos = self.envs.reset()
         # self.envs = gym.wrappers.RecordEpisodeStatistics(self.envs, deque_size=self.n_envs * max_episodes)
 
         # collect n_steps rollout
         for episode in range(max_episodes):
+            states, infos = self.envs.reset()
             # while not term or truncated:
-            episode_length_criteria = \
-                len(self.episode_buffer.episode_steps[self.episode_buffer.episode_steps > 0]) < self.max_episodes / 2
-            while not self.episode_buffer.buffer_full and episode_length_criteria:
+
+            self.episode_buffer.worker_rewards = np.zeros(shape=(self.n_workers, self.max_episode_steps), dtype=np.float32)
+            self.worker_exploratory = np.zeros(shape=(self.n_workers, self.max_episode_steps), dtype=np.bool_)
+            self.episode_buffer.worker_steps = np.zeros(shape=self.n_workers, dtype=np.uint16)
+            self.worker_seconds = np.array([time.time(), ] * self.n_workers, dtype=np.float64)
+            self.episode_buffer.buffer_full = False
+            while not self.episode_buffer.buffer_full and (
+                    len(self.episode_buffer.episode_steps[self.episode_buffer.episode_steps > 0]
+                        ) < self.episode_buffer.max_episodes / 2):
                 with torch.no_grad():
                     actions, logpas, are_exploratory = self.policy_model.np_pass(states)
-                    values = self.value_model(states)
+                    # values = self.value_model(states)
                 next_states, rewards, terminals, truncateds, infos = self.envs.step(actions)
                 self.episode_buffer.remember(states, actions, logpas, rewards, terminals, truncateds)
+                for w_idx in range(self.n_workers):
+                    if self.episode_buffer.worker_steps[w_idx] + 1 == self.max_episode_steps:
+                        truncateds[w_idx] = True
                 terminal_or_truncated = np.logical_or(terminals, truncateds)
-                if True in terminal_or_truncated:
-                    self.episode_buffer.process_terminals(terminals, truncateds, self.value_model, next_states)
                 states = next_states
                 self.episode_buffer.worker_steps += 1
+
+                if True in terminal_or_truncated:
+                    self.episode_buffer.process_terminals(terminals, truncateds, self.value_model, next_states)
+
             episode_timestep, episode_reward, episode_exploration, \
                 episode_seconds = self.episode_buffer.process_episode_full(self.value_model)
-
             self.episode_timestep.extend(episode_timestep)
             self.episode_reward.extend(episode_reward)
             self.episode_exploration.extend(episode_exploration)
@@ -540,31 +438,57 @@ class PPO:
             self.episode_buffer.clear()
             print(f"episode {episode} avg rwd {np.average(episode_reward):.1f}; reward {episode_reward} ")
 
+            # print eval scores
+            eval_results = self.evaluate(1)
+            if (episode % self.eval_interval == 0) or (episode+1 == max_episodes):
+                print(f">> episode {episode} eval rwd {eval_results.mean():.2f}, {eval_results}")
+
         print('Training complete.')
 
         # returns_list = self.envs.return_queue
         returns_list = self.episode_reward
-        self.rewards_history = {env_id: np.array(returns_list)}
+        self.rewards_history = {env_id: np.array(returns_list), "eval": self.eval_history}
         self.envs.close()
+        self.eval_env.close()
         del self.envs
         return result
 
+    def evaluate(self, n_episodes):
+        self.eval_history = []
+        for episode in range(n_episodes):
+            state, info = self.eval_env.reset()
+            terminal, truncated = False, False
+            states = state.reshape(1, -1)
+            rewards_list = []
+            while not (terminal or truncated):
+                with torch.no_grad():
+                    # actions = self.policy_model.select_action(states)
+                    # greedy action
+                    action = self.policy_model.select_greedy_action(states)
+                    next_state, reward, terminal, truncated, info = self.eval_env.step(action)
+                    rewards_list.append(reward)
+                    states = next_state.reshape(1, -1)
+            self.eval_history.append(sum(rewards_list))
+            self.eval_history = np.array(self.eval_history)
+        return self.eval_history
 
 
 if __name__ == '__main__':
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = "cpu"
     print("using", device)
-    BATCH_SIZE = 256
     LR = 0.0005
     tau = 0.97
     gamma = 1.0
     env_id = "LunarLander-v2"
-    update_interval = 5
+    # env_id = "CartPole-v1"
     EPOCHS = 100
-    n_workers = 4
+    n_workers = 2
+    # max number of episode per batch, including all workers
+    # take care not to run out of RAM!!
     max_episodes = 16
+    # for lunar lander, hasn't seen number of steps > 300
     max_episode_steps = 1000  # truncated step set by env will take precedence
-    agent = PPO(env_id, LR, BATCH_SIZE, update_interval, tau, gamma, max_episodes, max_episode_steps, n_workers)
+    agent = PPO(env_id, LR, tau, gamma, max_episodes, max_episode_steps, n_workers, device)
     agent.train(EPOCHS)
     plot_training_history(agent.rewards_history, save=False)

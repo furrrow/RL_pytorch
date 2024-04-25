@@ -185,7 +185,7 @@ class EpisodeBuffer:
         while not buffer_full and len(self.episode_steps[self.episode_steps > 0]) < self.max_episodes / 2:
             with torch.no_grad():
                 actions, logpas, are_exploratory = policy_model.np_pass(states)
-                values = value_model(states)
+                # values = value_model(states)
 
             next_states, rewards, terminals, truncateds, infos = self.envs.step(actions)
             self.states_mem[self.current_ep_idxs, worker_steps] = states
@@ -200,6 +200,10 @@ class EpisodeBuffer:
                     truncateds[w_idx] = True
 
             terminal_or_truncated = np.logical_or(terminals, truncateds)
+            idx_resets = np.flatnonzero(terminal_or_truncated)
+            states = next_states
+            worker_steps += 1
+
             if True in terminal_or_truncated:
                 next_values = np.zeros(shape=self.n_workers)
                 if True in truncateds:
@@ -207,9 +211,6 @@ class EpisodeBuffer:
                     idx_truncated = np.flatnonzero(truncateds)
                     with torch.no_grad():
                         next_values[idx_truncated] = value_model(next_states[idx_truncated]).squeeze().cpu().numpy()
-
-            states = next_states
-            worker_steps += 1
 
             # process the workers if we have terminals
             if terminal_or_truncated.sum():
@@ -219,6 +220,8 @@ class EpisodeBuffer:
 
                 # process each terminal worker at a time:
                 for w_idx in range(self.n_workers):
+                    if w_idx not in idx_resets:
+                        continue  # skip if worker is not terminal
                     e_idx = self.current_ep_idxs[w_idx]
                     T = worker_steps[w_idx]
                     self.episode_steps[e_idx] = T
@@ -298,8 +301,6 @@ class PPO:
     def __init__(self,
                  env_id,
                  LR,
-                 batch_size,
-                 update_interval,
                  tau,
                  gamma,
                  max_episodes,
@@ -310,8 +311,6 @@ class PPO:
         # assert n_envs > 1
         self.lr = LR
         self.env_id = env_id
-        self.batch_size = batch_size
-        self.update_interval = update_interval
         self.tau = tau
         self.gamma = gamma
         self.max_episodes = max_episodes
@@ -319,7 +318,9 @@ class PPO:
         self.n_envs = n_envs
         self.n_workers = n_envs
         self.device = device
+        self.eval_history = None
         self.envs = gym.vector.make(env_id, num_envs=n_envs)
+        self.eval_env = gym.make(self.env_id)
         self.n_states = self.envs.single_observation_space.shape[0]
         self.n_action = self.envs.single_action_space.n
         self.bounds = (self.envs.single_action_space.start, self.n_action - 1)
@@ -338,7 +339,6 @@ class PPO:
 
         self.episode_buffer = EpisodeBuffer(self.n_states, self.gamma, self.tau, self.n_workers,
                                             self.max_episodes, self.max_episode_steps, self.envs)
-        self.policy_optimizer_lr = 0.0003
         self.policy_optimization_epochs = 80
         self.policy_sample_ratio = 0.8
         self.policy_clip_range = 0.1
@@ -352,6 +352,7 @@ class PPO:
         self.value_clip_range = float('inf')
 
         self.EPS = 1e-6
+        self.eval_interval = 5
 
     def optimize_model(self):
         states, actions, returns, gaes, logpas = self.episode_buffer.get_stacks()
@@ -372,8 +373,8 @@ class PPO:
             logpas_pred, entropies_pred = self.policy_model.get_predictions(states_batch,
                                                                             actions_batch)
             # log probabilities to ratio of probabilities
-            ratios = (logpas_pred - logpas_batch).exp()  # [batch]
-            pi_obj = gaes_batch * ratios  # [batch]
+            ratios = (logpas_pred - logpas_batch).exp()
+            pi_obj = gaes_batch * ratios
             pi_obj_clipped = gaes_batch * ratios.clamp(1.0 - self.policy_clip_range,
                                                        1.0 + self.policy_clip_range)
             policy_loss = -torch.min(pi_obj, pi_obj_clipped).mean()
@@ -408,6 +409,7 @@ class PPO:
 
             self.value_optimizer.zero_grad()
             value_loss.backward()
+            # print("value_loss", value_loss)
             torch.nn.utils.clip_grad_norm_(self.value_model.parameters(),
                                            self.value_model_max_grad_norm)
             self.value_optimizer.step()
@@ -438,30 +440,52 @@ class PPO:
             self.episode_buffer.clear()
             print(f"episode {episode} avg rwd {np.average(episode_reward):.1f}; reward {episode_reward} ")
 
+            # print eval scores
+            if (episode % self.eval_interval == 0) or (episode+1 == max_episodes):
+                eval_results = self.evaluate(5)
+                print(f">> episode {episode} eval rwd {eval_results.mean():.2f}")
+
         print('Training complete.')
 
         # returns_list = self.envs.return_queue
         returns_list = self.episode_reward
-        self.rewards_history = {env_id: np.array(returns_list)}
+        self.rewards_history = {env_id: np.array(returns_list), "eval": self.eval_history}
         self.envs.close()
+        self.eval_env.close()
         del self.envs
         return result
+
+    def evaluate(self, n_episodes):
+        self.eval_history = []
+        for episode in range(n_episodes):
+            state, info = self.eval_env.reset()
+            terminal, truncated = False, False
+            states = state.reshape(1, -1)
+            rewards_list = []
+            while not (terminal or truncated):
+                with torch.no_grad():
+                    # actions, logpas, are_exploratory = self.policy_model.np_pass(states)
+                    action = self.policy_model.select_greedy_action(states)
+                    next_state, reward, terminal, truncated, info = self.eval_env.step(action)
+                    rewards_list.append(reward)
+                    states = next_state.reshape(1, -1)
+            self.eval_history.append(sum(rewards_list))
+        self.eval_history = np.array(self.eval_history)
+        return self.eval_history
 
 
 if __name__ == '__main__':
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = "cpu"
     print("using", device)
-    BATCH_SIZE = 256
     LR = 0.0005
     tau = 0.97
     gamma = 1.0
     env_id = "CartPole-v1"
-    update_interval = 5
     EPOCHS = 100
-    n_workers = 3
+    n_workers = 2
     max_episodes = 16
     max_episode_steps = 1000  # truncated step set by env will take precedence
-    agent = PPO(env_id, LR, BATCH_SIZE, update_interval, tau, gamma, max_episodes, max_episode_steps, n_workers)
+    agent = PPO(env_id, LR, tau, gamma, max_episodes, max_episode_steps, n_workers, device)
     agent.train(EPOCHS)
     plot_training_history(agent.rewards_history, save=False)

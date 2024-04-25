@@ -1,17 +1,15 @@
-import gc
-import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils import plot_training_history
+import torch.multiprocessing as mp
 import numpy as np
 import gymnasium as gym
+import gc
+import time
 
-""" PPO code implementation using pettingzoo's parallel environments
+""" PPO code implementation,
 heavily referencing:
 https://github.com/mimoralea/gdrl/blob/master/notebooks/chapter_12/chapter-12.ipynb
-
-https://gymnasium.farama.org/api/experimental/vector/
 
 """
 
@@ -183,7 +181,7 @@ class EpisodeBuffer:
         while not buffer_full and len(self.episode_steps[self.episode_steps > 0]) < self.max_episodes / 2:
             with torch.no_grad():
                 actions, logpas, are_exploratory = policy_model.np_pass(states)
-                # values = value_model(states)
+                values = value_model(states)
 
             next_states, rewards, terminals, truncateds, infos = self.envs.step(actions)
             self.states_mem[self.current_ep_idxs, worker_steps] = states
@@ -195,11 +193,12 @@ class EpisodeBuffer:
 
             for w_idx in range(self.n_workers):
                 if worker_steps[w_idx] + 1 == self.max_episode_steps:
+                    # terminals[w_idx] = 1
                     truncateds[w_idx] = True
 
             terminal_or_truncated = np.logical_or(terminals, truncateds)
-            idx_resets = np.flatnonzero(terminal_or_truncated)
             if True in terminal_or_truncated:
+                idx_resets = np.flatnonzero(terminal_or_truncated)
                 next_values = np.zeros(shape=self.n_workers)
                 if True in truncateds:
                     # we bootstrap next values for truncated or non-terminal states
@@ -212,9 +211,8 @@ class EpisodeBuffer:
 
             # process the workers if we have terminals
             if terminal_or_truncated.sum():
-                # NOTE: gymnasium parallel envs reset themselves, unsure how this affects training
-                # new_states, infos = self.envs.reset()
-                # states = new_states
+                new_states, infos = self.envs.reset(ranks=idx_resets)
+                states[idx_resets] = new_states
 
                 # process each terminal worker at a time:
                 for w_idx in range(self.n_workers):
@@ -238,13 +236,10 @@ class EpisodeBuffer:
                     ep_states = self.states_mem[e_idx, :T]
                     # get the predicted values, append the bootstrapping value to the vector
                     with torch.no_grad():
-                        value_net_out = value_model(ep_states)
-                        if len(value_net_out.shape) > 1:
-                            value_net_out = value_net_out.squeeze(-1)
-                        ep_values = torch.cat((
-                            value_net_out,
-                            torch.tensor([next_values[w_idx]], device=value_model.device, dtype=torch.float32)
-                        ))
+                        ep_values = torch.cat((value_model(ep_states).squeeze(),
+                                               torch.tensor([next_values[w_idx]],
+                                                            device=value_model.device,
+                                                            dtype=torch.float32)))
                     np_ep_values = ep_values.view(-1).cpu().numpy()
                     ep_tau_discounts = self.tau_discounts[:T]
                     deltas = ep_rewards[:-1] + self.gamma * np_ep_values[1:] - np_ep_values[:-1]
@@ -296,6 +291,89 @@ class EpisodeBuffer:
         return self.episode_steps[self.episode_steps > 0].sum()
 
 
+class MultiprocessEnv(object):
+    def __init__(self, env_name, n_workers):
+        self.env_name = env_name
+        self.n_workers = n_workers
+        self.pipes = [mp.Pipe() for rank in range(self.n_workers)]
+        self.workers = [
+            mp.Process(
+                target=self.work,
+                args=(rank, self.pipes[rank][1])) for rank in range(self.n_workers)]
+        [w.start() for w in self.workers]
+        self.dones = {rank: False for rank in range(self.n_workers)}
+
+    def reset(self, ranks=None, **kwargs):
+        state_list, info_list = [], []
+        if not (ranks is None):
+            [self.send_msg(('reset', {}), rank) for rank in ranks]
+            for rank, (parent_end, _) in enumerate(self.pipes):
+                if rank in ranks:
+                    o, info = parent_end.recv()
+                    state_list.append(o)
+                    info_list.append(info)
+            return np.vstack(state_list), np.vstack(info_list)
+            # return np.stack([parent_end.recv() for rank, (parent_end, _) in enumerate(self.pipes) if rank in ranks])
+
+        self.broadcast_msg(('reset', kwargs))
+        for parent_end, _ in self.pipes:
+            o, info = parent_end.recv()
+            state_list.append(o)
+            info_list.append(info)
+        return np.vstack(state_list), np.vstack(info_list)
+        # return np.stack([parent_end.recv() for parent_end, _ in self.pipes])
+
+    def step(self, actions):
+        assert len(actions) == self.n_workers
+        [self.send_msg(
+            ('step', {'action': actions[rank]}),
+            rank) for rank in range(self.n_workers)]
+        obs_list = []
+        rewards_list = []
+        term_list = []
+        trunk_list = []
+        info_list = []
+        for rank in range(self.n_workers):
+            parent_end, _ = self.pipes[rank]
+            obs, reward, term, trunc, info = parent_end.recv()
+            obs_list.append(obs)
+            rewards_list.append(reward)
+            term_list.append(term)
+            trunk_list.append(trunc)
+            info_list.append(info)
+        return np.array(obs_list), np.array(rewards_list), np.array(term_list), np.array(trunk_list), np.array(
+            info_list)
+
+    def close(self, **kwargs):
+        self.broadcast_msg(('close', kwargs))
+        [w.join() for w in self.workers]
+
+    def work(self, rank, worker_end):
+        # env = self.make_env_fn(**self.make_env_kargs, seed=self.seed + rank)
+        env = gym.make(self.env_name)
+        while True:
+            cmd, kwargs = worker_end.recv()
+            if cmd == 'reset':
+                worker_end.send(env.reset(**kwargs))
+            elif cmd == 'step':
+                worker_end.send(env.step(**kwargs))
+            # elif cmd == '_past_limit':
+            #     worker_end.send(env._elapsed_steps >= env._max_episode_steps)
+            else:
+                # including close command
+                env.close(**kwargs);
+                del env;
+                worker_end.close()
+                break
+
+    def send_msg(self, msg, rank):
+        parent_end, _ = self.pipes[rank]
+        parent_end.send(msg)
+
+    def broadcast_msg(self, msg):
+        [parent_end.send(msg) for parent_end, _ in self.pipes]
+
+
 class PPO:
     def __init__(self,
                  env_id,
@@ -317,13 +395,12 @@ class PPO:
         self.n_envs = n_envs
         self.n_workers = n_envs
         self.device = device
-        self.eval_history = None
-        self.envs = gym.vector.make(env_id, num_envs=n_envs)
-        self.eval_env = gym.make(self.env_id)
-        self.n_states = self.envs.single_observation_space.shape[0]
-        self.n_action = self.envs.single_action_space.n
-        # self.bounds = (self.envs.single_action_space.start, self.n_action - 1)
-        # self.envs = MultiprocessEnv(env_id, n_envs)
+        self.eval_env = gym.make(env_id)
+        self.n_states = self.eval_env.observation_space.shape[0]
+        self.n_action = self.eval_env.action_space.n
+        # self.bounds = (self.env.action_space.start, self.n_action - 1)
+        # self.envs = gym.vector.make(env_id, num_envs=n_envs)
+        self.envs = MultiprocessEnv(env_id, n_envs)
 
         self.episode_timestep, self.episode_reward = [], []
         self.episode_seconds, self.episode_exploration = [], []
@@ -338,17 +415,21 @@ class PPO:
 
         self.episode_buffer = EpisodeBuffer(self.n_states, self.gamma, self.tau, self.n_workers,
                                             self.max_episodes, self.max_episode_steps, self.envs)
-        self.policy_optimization_epochs = 80  # 80
+        self.policy_optimization_epochs = 80
         self.policy_sample_ratio = 0.8
         self.policy_clip_range = 0.1
         self.policy_stopping_kl = 0.02
-        self.value_optimization_epochs = 80  # 80
+
+        self.value_optimization_epochs = 80
         self.value_sample_ratio = 0.8
+        self.value_clip_range = float('inf')
         self.value_stopping_mse = 25
+
         self.entropy_loss_weight = 0.01
         self.policy_model_max_grad_norm = float('inf')
         self.value_model_max_grad_norm = float('inf')
-        self.value_clip_range = float('inf')
+
+
         self.EPS = 1e-6
         self.eval_interval = 5
 
@@ -422,7 +503,6 @@ class PPO:
         result = np.empty((max_episodes, 5))
         result[:] = np.nan
         training_time = 0
-        # self.envs = gym.wrappers.RecordEpisodeStatistics(self.envs, deque_size=self.n_envs * max_episodes)
 
         # collect n_steps rollout
         for episode in range(max_episodes):
@@ -438,9 +518,9 @@ class PPO:
             print(f"episode {episode} avg rwd {np.average(episode_reward):.1f}; reward {episode_reward} ")
 
             # print eval scores
+            eval_results = self.evaluate(1)
             if (episode % self.eval_interval == 0) or (episode+1 == max_episodes):
-                eval_results = self.evaluate(5)
-                print(f">> episode {episode} eval rwd {eval_results.mean():.2f}")
+                print(f">> episode {episode} eval rwd {eval_results.mean():.2f}, {eval_results}")
 
         print('Training complete.')
 
@@ -468,7 +548,7 @@ class PPO:
                     rewards_list.append(reward)
                     states = next_state.reshape(1, -1)
             self.eval_history.append(sum(rewards_list))
-        self.eval_history = np.array(self.eval_history)
+            self.eval_history = np.array(self.eval_history)
         return self.eval_history
 
 
@@ -480,14 +560,14 @@ if __name__ == '__main__':
     tau = 0.97
     gamma = 0.99
     env_id = "LunarLander-v2"
+    # env_id = "CartPole-v1"
     EPOCHS = 800
     n_workers = 8
     # max number of episode per batch, including all workers
     # take care not to run out of RAM!!
-    max_episodes = 32
+    max_buffer_episodes = 16
     # for lunar lander, hasn't seen number of steps > 300
-    max_episode_steps = 1000  # truncated step set by env will take precedence
-    agent = PPO(env_id, LR, tau, gamma, max_episodes, max_episode_steps, n_workers, device)
+    max_buffer_episode_steps = 1000  # truncated step set by env will take precedence
+    agent = PPO(env_id, LR, tau, gamma, max_buffer_episodes, max_buffer_episode_steps, n_workers, device)
     agent.train(EPOCHS)
-    plot_training_history(agent.rewards_history, save=False)
-    print(agent.rewards_history)
+    # plot_training_history(agent.rewards_history, save=False)
