@@ -492,7 +492,8 @@ if __name__ == '__main__':
     #    pickle.dump(results, file)
 
     # spread
-    # env = simple_spread_v3.parallel_env(max_cycles=50, continuous_actions=True)
+    # env = simple_spread_v3.parallel_env(max_cycles=50, render_mode="rgb_array", continuous_actions=True)
+    # env.scenario_name = "simple_spread"
     # maddpg = MADDPG(agent_fn = lambda agent: MADDPGAgent(
     #     policy_model_fn = lambda num_obs, bounds: FCDP(num_obs, bounds, hidden_dims=(256,256), device=torch.device("cuda")),
     #     policy_optimizer_lr = 0.0001,
@@ -532,6 +533,8 @@ if __name__ == '__main__':
     episode_returns, best_model, saved_models = maddpg.train(env, gamma=0.95, num_episodes=5000, tau=0.005,
                                                              batch_size=512,
                                                              save_models=[1, 50, 100, 500, 1000, 2000, 5000])
+    
+    
     results = {'episode_returns': episode_returns, 'best_model': best_model, 'saved_models': saved_models}
     plot_training_history(episode_returns, save=True, filename=env.scenario_name)
 
