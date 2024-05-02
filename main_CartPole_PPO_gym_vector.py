@@ -438,7 +438,8 @@ class PPO:
             self.episode_seconds.extend(episode_seconds)
             self.optimize_model()
             self.episode_buffer.clear()
-            print(f"episode {episode} avg rwd {np.average(episode_reward):.1f}; reward {episode_reward} ")
+            print(f"episode {episode} avg rwd {np.average(episode_reward):.1f}; "
+                  f"avg exploration {np.average(episode_exploration):.1f}, reward {episode_reward}")
 
             # print eval scores
             if (episode % self.eval_interval == 0) or (episode+1 == max_episodes):

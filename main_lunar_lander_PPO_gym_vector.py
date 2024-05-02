@@ -435,7 +435,8 @@ class PPO:
             self.episode_seconds.extend(episode_seconds)
             self.optimize_model()
             self.episode_buffer.clear()
-            print(f"episode {episode} avg rwd {np.average(episode_reward):.1f}; reward {episode_reward} ")
+            print(f"episode {episode} avg rwd {np.average(episode_reward):.1f}; "
+                  f"avg exploration {np.average(episode_exploration):.1f}, reward {episode_reward}")
 
             # print eval scores
             if (episode % self.eval_interval == 0) or (episode+1 == max_episodes):
@@ -474,14 +475,14 @@ class PPO:
 
 if __name__ == '__main__':
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = "cuda"
+    device = "cpu"
     print("using", device)
     LR = 0.0003
     tau = 0.97
     gamma = 0.99
     env_id = "LunarLander-v2"
     EPOCHS = 800
-    n_workers = 8
+    n_workers = 4
     # max number of episode per batch, including all workers
     # take care not to run out of RAM!!
     max_episodes = 32

@@ -11,7 +11,7 @@ import gymnasium as gym
 heavily referencing:
 https://github.com/mimoralea/gdrl/blob/master/notebooks/chapter_12/chapter-12.ipynb
 
-https://gymnasium.farama.org/api/experimental/vector/
+Alternate implementation where the environment is external to the EpisodeBuffer()
 
 """
 
@@ -176,10 +176,11 @@ class EpisodeBuffer:
         self.buffer_full = False
         gc.collect()
 
-    def remember(self, states, actions, logpas, rewards, terminals, truncateds):
+    def remember(self, states, actions, logpas, rewards, are_exploratory):
         self.states_mem[self.current_ep_idxs, self.worker_steps] = states
         self.actions_mem[self.current_ep_idxs, self.worker_steps] = actions
         self.logpas_mem[self.current_ep_idxs, self.worker_steps] = logpas
+        self.worker_exploratory[np.arange(self.n_workers), self.worker_steps] = are_exploratory
         self.worker_rewards[np.arange(self.n_workers), self.worker_steps] = rewards
 
     def process_terminals(self, terminals, truncateds, value_model, next_states):
@@ -417,7 +418,7 @@ class PPO:
                     actions, logpas, are_exploratory = self.policy_model.np_pass(states)
                     # values = self.value_model(states)
                 next_states, rewards, terminals, truncateds, infos = self.envs.step(actions)
-                self.episode_buffer.remember(states, actions, logpas, rewards, terminals, truncateds)
+                self.episode_buffer.remember(states, actions, logpas, rewards, are_exploratory)
                 for w_idx in range(self.n_workers):
                     if self.episode_buffer.worker_steps[w_idx] + 1 == self.max_episode_steps:
                         truncateds[w_idx] = True
@@ -436,8 +437,8 @@ class PPO:
             self.episode_seconds.extend(episode_seconds)
             self.optimize_model()
             self.episode_buffer.clear()
-            print(f"episode {episode} avg rwd {np.average(episode_reward):.1f}; reward {episode_reward} ")
-
+            print(f"episode {episode} avg rwd {np.average(episode_reward):.1f}; "
+                  f"avg exploration {np.average(episode_exploration):.2f}, reward {episode_reward}")
             # print eval scores
             eval_results = self.evaluate(1)
             if (episode % self.eval_interval == 0) or (episode+1 == max_episodes):
