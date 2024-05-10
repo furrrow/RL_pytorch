@@ -18,3 +18,4 @@ dependencies:
     - pettingzoo[mpe]
     - swig
     - box2d-py
+    - torchrl

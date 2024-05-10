@@ -118,6 +118,7 @@ dmypy.json
 .idea
 videos/
 save_models/
+runs/
 *.csv
 *.png
 *.npy
