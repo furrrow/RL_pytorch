@@ -6,12 +6,16 @@ import torch.nn.functional as F
 from utils import plot_training_history
 import numpy as np
 import gymnasium as gym
-
+from gymnasium.wrappers import AtariPreprocessing
 """ PPO code implementation using pettingzoo's parallel environments
-heavily referencing:
-https://github.com/mimoralea/gdrl/blob/master/notebooks/chapter_12/chapter-12.ipynb
 
-https://gymnasium.farama.org/api/experimental/vector/
+Using breakout as a benchmarking environment.
+https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/
+
+"Rule of thumb: 400 episodic return in breakout: Check if your PPO could obtain 400 episodic return in breakout. 
+We have found this to be a practical rule of thumb to determine the fidelity of online PPO implementations in GitHub. 
+Often we found PPO repositories not able to do this, and we know they probably do not match all implementation 
+details of openai/baselines’ PPO."
 
 """
 
@@ -24,9 +28,13 @@ class FCCA(nn.Module):
                  activation_fc=F.relu):
         super(FCCA, self).__init__()
         self.activation_fc = activation_fc
-        self.linear1 = nn.Linear(input_dim, 32)
-        self.linear2 = nn.Linear(32, 32)
-        self.output_layer = nn.Linear(32, output_dim)
+        self.conv1 = nn.LazyConv1d(32, 8, 4)
+        self.conv2 = nn.LazyConv1d(64, 4, 2)
+        self.conv3 = nn.LazyConv1d(64, 3, 1)
+        self.flatten = nn.Flatten()
+        self.linear1 = nn.LazyLinear(512)
+        self.linear2 = nn.LazyLinear(32)
+        self.output_layer = nn.LazyLinear(output_dim)
         self.device = torch.device(device)
         self.to(self.device)
 
@@ -40,13 +48,16 @@ class FCCA(nn.Module):
 
     def forward(self, states):
         x = self._format(states)
+        x = self.activation_fc(self.conv1(x))
+        x = self.activation_fc(self.conv2(x))
+        x = self.activation_fc(self.conv3(x))
+        x = self.flatten(x)
         x = self.activation_fc(self.linear1(x))
         x = self.activation_fc(self.linear2(x))
         out = self.output_layer(x)
         return out
 
     def np_pass(self, states):
-        states = torch.tensor(states).to(self.device)
         logits = self.forward(states)
         np_logits = logits.detach().cpu().numpy()
         dist = torch.distributions.Categorical(logits=logits)
@@ -72,6 +83,8 @@ class FCCA(nn.Module):
         return logpas, entropies
 
     def select_greedy_action(self, states):
+        if len(states.shape) < 3:
+            states = np.expand_dims(states, 0)
         logits = self.forward(states)
         return np.argmax(logits.detach().squeeze().cpu().numpy())
 
@@ -83,9 +96,13 @@ class FCV(nn.Module):
                  activation_fc=F.relu):
         super(FCV, self).__init__()
         self.activation_fc = activation_fc
-        self.linear1 = nn.Linear(input_dim, 32)
-        self.linear2 = nn.Linear(32, 32)
-        self.output_layer = nn.Linear(32, 1)
+        self.conv1 = nn.LazyConv1d(32, 8, 4)
+        self.conv2 = nn.LazyConv1d(64, 4, 2)
+        self.conv3 = nn.LazyConv1d(64, 3, 1)
+        self.flatten = nn.Flatten()
+        self.linear1 = nn.LazyLinear(512)
+        self.linear2 = nn.LazyLinear(32)
+        self.output_layer = nn.LazyLinear(1)
         self.device = torch.device(device)
         self.to(self.device)
 
@@ -99,15 +116,19 @@ class FCV(nn.Module):
 
     def forward(self, states):
         x = self._format(states)
-        # x = torch.tensor(states).to(self.device)
+        x = self.activation_fc(self.conv1(x))
+        x = self.activation_fc(self.conv2(x))
+        x = self.activation_fc(self.conv3(x))
+        x = self.flatten(x)
         x = self.activation_fc(self.linear1(x))
         x = self.activation_fc(self.linear2(x))
         out = self.output_layer(x)
         return out
 
 
-class EpisodeBuffer:
+class EpisodeBuffer2d:
     """ Episode Buffer
+    MODIFIED VERSION: assuming 2d state shapes to deal with images
     """
     def __init__(self,
                  state_dim,
@@ -127,8 +148,9 @@ class EpisodeBuffer:
         self.max_episodes = max_episodes
         self.max_episode_steps = max_episode_steps
         self.envs = envs
-        self.states_mem = np.empty(
-            shape=(self.max_episodes, self.max_episode_steps, self.state_dim), dtype=np.float64)
+        self.state_mem_shape = (self.max_episodes, self.max_episode_steps,
+                                self.state_dim[1], self.state_dim[2])
+        self.states_mem = np.empty(shape=self.state_mem_shape, dtype=np.float64)
         self.actions_mem = np.empty(shape=(self.max_episodes, self.max_episode_steps), dtype=np.uint8)
         self.returns_mem = np.empty(shape=(self.max_episodes, self.max_episode_steps), dtype=np.float32)
         self.gaes_mem = np.empty(shape=(self.max_episodes, self.max_episode_steps), dtype=np.float32)
@@ -150,8 +172,7 @@ class EpisodeBuffer:
         self.clear()
 
     def clear(self):
-        self.states_mem = np.empty(
-            shape=(self.max_episodes, self.max_episode_steps, self.state_dim), dtype=np.float64)
+        self.states_mem = np.empty(shape=self.state_mem_shape, dtype=np.float64)
         self.actions_mem = np.empty(shape=(self.max_episodes, self.max_episode_steps), dtype=np.uint8)
         self.returns_mem = np.empty(shape=(self.max_episodes, self.max_episode_steps), dtype=np.float32)
         self.gaes_mem = np.empty(shape=(self.max_episodes, self.max_episode_steps), dtype=np.float32)
@@ -318,9 +339,12 @@ class PPO:
         self.n_workers = n_envs
         self.device = device
         self.eval_history = None
-        self.envs = gym.vector.make(env_id, num_envs=n_envs)
-        self.eval_env = gym.make(self.env_id)
-        self.n_states = self.envs.single_observation_space.shape[0]
+        self.envs = gym.vector.make(env_id, num_envs=n_envs, wrappers=AtariPreprocessing)
+
+        self.eval_env = AtariPreprocessing(gym.make(self.env_id))
+
+        self.state_shape = self.envs.observation_space.shape
+        self.n_states = self.envs.observation_space.shape[0]
         self.n_action = self.envs.single_action_space.n
         # self.bounds = (self.envs.single_action_space.start, self.n_action - 1)
         # self.envs = MultiprocessEnv(env_id, n_envs)
@@ -336,8 +360,8 @@ class PPO:
         self.value_model = FCV(self.n_states, device=self.device)
         self.value_optimizer = torch.optim.Adam(self.value_model.parameters(), self.lr)
 
-        self.episode_buffer = EpisodeBuffer(self.n_states, self.gamma, self.tau, self.n_workers,
-                                            self.max_episodes, self.max_episode_steps, self.envs)
+        self.episode_buffer = EpisodeBuffer2d(self.state_shape, self.gamma, self.tau, self.n_workers,
+                                              self.max_episodes, self.max_episode_steps, self.envs)
         self.policy_optimization_epochs = 80  # 80
         self.policy_sample_ratio = 0.8
         self.policy_clip_range = 0.1
@@ -350,7 +374,7 @@ class PPO:
         self.value_model_max_grad_norm = float('inf')
         self.value_clip_range = float('inf')
         self.EPS = 1e-6
-        self.eval_interval = 5
+        self.eval_interval = 10
 
     def optimize_model(self):
         states, actions, returns, gaes, logpas = self.episode_buffer.get_stacks()
@@ -438,11 +462,12 @@ class PPO:
             self.optimize_model()
             self.episode_buffer.clear()
             print(f"episode {episode} avg rwd {np.average(episode_reward):.1f}; "
-                  f"avg exploration {np.average(episode_exploration):.1f}, reward {episode_reward}")
+                  f"avg exploration {np.average(episode_exploration):.1f}, max ep_steps {max(episode_timestep)}, "
+                  f"reward {episode_reward}")
 
             # print eval scores
             if (episode % self.eval_interval == 0) or (episode+1 == max_episodes):
-                eval_results = self.evaluate(5)
+                eval_results = self.evaluate(1)
                 print(f">> episode {episode} eval rwd {eval_results.mean():.2f}")
 
         print('Training complete.')
@@ -460,36 +485,34 @@ class PPO:
         for episode in range(n_episodes):
             state, info = self.eval_env.reset()
             terminal, truncated = False, False
-            states = state.reshape(1, -1)
             rewards_list = []
             while not (terminal or truncated):
                 with torch.no_grad():
                     # actions = self.policy_model.select_action(states)
                     # greedy action
-                    action = self.policy_model.select_greedy_action(states)
-                    next_state, reward, terminal, truncated, info = self.eval_env.step(action)
+                    action = self.policy_model.select_greedy_action(state)
+                    state, reward, terminal, truncated, info = self.eval_env.step(action)
                     rewards_list.append(reward)
-                    states = next_state.reshape(1, -1)
             self.eval_history.append(sum(rewards_list))
         self.eval_history = np.array(self.eval_history)
         return self.eval_history
 
 
 if __name__ == '__main__':
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # device = "cpu"
     print("using", device)
-    LR = 0.0003
-    tau = 0.97
+    LR = 2.5e-4
+    tau = 0.95
     gamma = 0.99
-    env_id = "LunarLander-v2"
-    EPOCHS = 800
+    env_id = "BreakoutNoFrameskip-v4"
+    EPOCHS = 2000
     n_workers = 4
     # max number of episode per batch, including all workers
     # take care not to run out of RAM!!
     max_episodes = 32
     # for lunar lander, hasn't seen number of steps > 300
-    max_episode_steps = 1000  # truncated step set by env will take precedence
+    max_episode_steps = 10000  # truncated step set by env will take precedence
     agent = PPO(env_id, LR, tau, gamma, max_episodes, max_episode_steps, n_workers, device)
     agent.train(EPOCHS)
     plot_training_history(agent.rewards_history, save=False)

@@ -5,16 +5,23 @@ channels:
   - conda-forge
 dependencies:
   - python
-  - torch
-  - numpy
-  - matplotlib
-  - gymnasium
-  - gymnasium[box2d]
-  - tqdm
   - pip
-  - pyyaml
-  - moviepy
-  - pip:
+    - torch
+    - tensorboard
+    - numpy
+    - matplotlib
+    - gymnasium
+    - gymnasium[box2d]
+    - gymnasium[atari]
+    - gymnasium[accept-rom-license]
+    - gymnasium[other]
+    - tqdm
+    - pip
+    - pyyaml
+    - moviepy
     - pettingzoo[mpe]
     - swig
     - box2d-py
+    - tyro
+    - stable_baselines3
+    - wandb
