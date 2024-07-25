@@ -29,6 +29,18 @@ We have found this to be a practical rule of thumb to determine the fidelity of 
 Often we found PPO repositories not able to do this, and we know they probably do not match all implementation 
 details of openai/baselines’ PPO."
 
+cleanrl results:
+--
+Environment	ppo.py	openai/baselies' PPO (Huang et al., 2022)1
+CartPole-v1	490.04 ± 6.12	497.54 ± 4.02
+Acrobot-v1	-86.36 ± 1.32	-81.82 ± 5.58
+MountainCar-v0	-200.00 ± 0.00	-200.00 ± 0.00
+--
+Environment	ppo_atari.py	openai/baselies' PPO (Huang et al., 2022)1
+BreakoutNoFrameskip-v4	414.66 ± 28.09	406.57 ± 31.554
+PongNoFrameskip-v4	20.36 ± 0.20	20.512 ± 0.50
+BeamRiderNoFrameskip-v4	1915.93 ± 484.58	2642.97 ± 670.37
+
 """
 
 
