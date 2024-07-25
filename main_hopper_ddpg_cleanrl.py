@@ -2,6 +2,7 @@
 import os
 import random
 import time
+import datetime
 from dataclasses import dataclass
 
 import gymnasium as gym
@@ -11,7 +12,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import tyro
-from stable_baselines3.common.buffers import ReplayBuffer
+from torchrl.data import ReplayBuffer, LazyTensorStorage
+from tensordict import TensorDict
 from torch.utils.tensorboard import SummaryWriter
 
 """
@@ -20,6 +22,8 @@ HalfCheetah-v4	10374.07 ± 157.37
 Walker2d-v4	1240.16 ± 390.10
 Hopper-v4	1576.78 ± 818.98
 InvertedPendulum-v4	642.68 ± 69.5
+
+also note https://pytorch.org/rl/stable/tutorials/rb_tutorial.html
 """
 
 
@@ -125,16 +129,9 @@ class Actor(nn.Module):
 
 
 if __name__ == "__main__":
-    import stable_baselines3 as sb3
-
-    if sb3.__version__ < "2.0":
-        raise ValueError(
-            """Ongoing migration: run the following command to install the new dependencies:
-poetry run pip install "stable_baselines3==2.0.0a1"
-"""
-        )
     args = tyro.cli(Args)
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    current_time = datetime.datetime.now()
+    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{current_time.strftime('%m%d%y_%H%M')}"
     if args.track:
         import wandb
 
@@ -176,12 +173,9 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
     envs.single_observation_space.dtype = np.float32
     rb = ReplayBuffer(
-        args.buffer_size,
-        envs.single_observation_space,
-        envs.single_action_space,
-        device,
-        handle_timeout_termination=False,
-    )
+        storage=LazyTensorStorage(max_size=args.buffer_size, device=device),
+        batch_size=args.batch_size,
+        )
     start_time = time.time()
 
     # TRY NOT TO MODIFY: start the game
@@ -212,7 +206,15 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         for idx, trunc in enumerate(truncations):
             if trunc:
                 real_next_obs[idx] = infos["final_observation"][idx]
-        rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
+        data = TensorDict({
+            "observations": obs.astype(np.float32),
+            "next_observations": real_next_obs.astype(np.float32),
+            "actions": actions.astype(np.float32),
+            "rewards": rewards.astype(np.float32),
+            "dones": terminations,
+            "infos": infos,
+        }, batch_size=[1]).to(device)
+        rb.extend(data)
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
@@ -220,12 +222,12 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
             data = rb.sample(args.batch_size)
-            with torch.no_grad():
-                next_state_actions = target_actor(data.next_observations)
-                qf1_next_target = qf1_target(data.next_observations, next_state_actions)
-                next_q_value = data.rewards.flatten() + (1 - data.dones.flatten()) * args.gamma * (qf1_next_target).view(-1)
+            with (torch.no_grad()):
+                next_state_actions = target_actor(data["next_observations"])
+                qf1_next_target = qf1_target(data["next_observations"], next_state_actions)
+                next_q_value = data["rewards"].flatten() + (1 - 1 * data["dones"].flatten()) * args.gamma * qf1_next_target.view(-1)
 
-            qf1_a_values = qf1(data.observations, data.actions).view(-1)
+            qf1_a_values = qf1(data["observations"], data["actions"]).view(-1)
             qf1_loss = F.mse_loss(qf1_a_values, next_q_value)
 
             # optimize the model
@@ -234,7 +236,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             q_optimizer.step()
 
             if global_step % args.policy_frequency == 0:
-                actor_loss = -qf1(data.observations, actor(data.observations)).mean()
+                actor_loss = -qf1(data["observations"], actor(data["observations"])).mean()
                 actor_optimizer.zero_grad()
                 actor_loss.backward()
                 actor_optimizer.step()
