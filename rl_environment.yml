@@ -14,6 +14,7 @@ dependencies:
     - gymnasium[box2d]
     - gymnasium[atari]
     - gymnasium[accept-rom-license]
+    - gymnasium[mujoco]
     - gymnasium[other]
     - tqdm
     - pip
