@@ -1,14 +1,16 @@
 import gc
 import random
 import time
+import datetime
 import torch
 import os
 from dataclasses import dataclass
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
-from torchrl.data import ReplayBuffer, LazyTensorStorage
-from tensordict import tensorclass
+# from torchrl.data import ReplayBuffer, LazyTensorStorage
+from stable_baselines3.common.buffers import ReplayBuffer
+from tensordict import tensorclass, TensorDict
 
 from utils import plot_training_history
 import numpy as np
@@ -17,9 +19,10 @@ import tyro
 
 """ DQN code implementation using cleanRL
 heavily referencing:
-https://docs.cleanrl.dev/rl-algorithms/ppo/
+https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/dqn_atari.py
 
-https://gymnasium.farama.org/api/experimental/vector/
+NOTE: torchrl replay buffer runs into out of memory error, unresolved.
+commented out sections reflect this
 
 """
 
@@ -31,7 +34,7 @@ class Args:
     seed: int = 1
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
-    cuda: bool = True
+    cuda: bool = False
     """if toggled, cuda will be enabled by default"""
     track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
@@ -50,6 +53,7 @@ class Args:
 
     # Algorithm specific arguments
     env_id: str = "BreakoutNoFrameskip-v4"
+    """the environment id of the Atari game"""
     total_timesteps: int = 10000000
     """total timesteps of the experiments"""
     learning_rate: float = 1e-4
@@ -78,15 +82,6 @@ class Args:
     """the frequency of training"""
 
 
-@tensorclass
-class Experience:
-    states: torch.Tensor
-    next_states: torch.Tensor
-    actions: torch.Tensor
-    rewards: torch.Tensor
-    terminals: torch.Tensor
-    infos: dict
-
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
         if capture_video and idx == 0:
@@ -95,8 +90,18 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         else:
             env = gym.make(env_id)
         env = gym.wrappers.RecordEpisodeStatistics(env)
-        env.action_space.seed(seed)
 
+        # env = NoopResetEnv(env, noop_max=30)
+        # env = MaxAndSkipEnv(env, skip=4)
+        # env = EpisodicLifeEnv(env)
+        # if "FIRE" in env.unwrapped.get_action_meanings():
+        #     env = FireResetEnv(env)
+        # env = ClipRewardEnv(env)
+        env = gym.wrappers.ResizeObservation(env, (84, 84))
+        env = gym.wrappers.GrayScaleObservation(env)
+        env = gym.wrappers.FrameStack(env, 4)
+
+        env.action_space.seed(seed)
         return env
 
     return thunk
@@ -130,7 +135,8 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
 def main():
     args = tyro.cli(Args)
     assert args.num_envs == 1, "vectorized envs are not supported at the moment"
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    current_time = datetime.datetime.now()
+    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{current_time.strftime('%m%d%y_%H%M')}"
     if args.track:
         import wandb
 
@@ -168,16 +174,17 @@ def main():
     optimizer = torch.optim.Adam(q_network.parameters(), lr=args.learning_rate)
     target_network = QNetwork(envs).to(device)
     target_network.load_state_dict(q_network.state_dict())
-
+    rb = ReplayBuffer(
+        args.buffer_size,
+        envs.single_observation_space,
+        envs.single_action_space,
+        device,
+        optimize_memory_usage=True,
+        handle_timeout_termination=False,
+    )
     # rb = ReplayBuffer(
-    #     args.buffer_size,
-    #     envs.single_observation_space,
-    #     envs.single_action_space,
-    #     device,
-    #     optimize_memory_usage=True,
-    #     handle_timeout_termination=False,
+    #     storage=LazyTensorStorage(max_size=args.buffer_size, device=device)
     # )
-    rb = ReplayBuffer(storage=LazyTensorStorage(max_size=args.buffer_size, device=torch.device(device)))
     start_time = time.time()
 
     # TRY NOT TO MODIFY: start the game
@@ -208,7 +215,17 @@ def main():
         for idx, trunc in enumerate(truncations):
             if trunc:
                 real_next_obs[idx] = infos["final_observation"][idx]
-        rb.add(Experience(obs, real_next_obs, actions, rewards, terminations, infos))
+        rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
+        # data = TensorDict({
+        #     "observations": obs.astype(np.float32),
+        #     "next_observations": real_next_obs.astype(np.float32),
+        #     "actions": actions.astype(np.float32),
+        #     "rewards": rewards.astype(np.float32),
+        #     "dones": terminations,
+        #     # "infos": infos,
+        # }, batch_size=[1]).to(device)
+        # rb.extend(data)
+
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
