@@ -12,6 +12,8 @@ import torch.optim as optim
 import tyro
 from torch.distributions.normal import Normal
 from torch.utils.tensorboard import SummaryWriter
+from torchrl.data import ReplayBuffer, LazyTensorStorage
+from tensordict import TensorDict
 
 
 @dataclass
@@ -183,12 +185,20 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     # ALGO Logic: Storage setup
-    obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
-    actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
-    logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    values = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    buffer = TensorDict({
+        "obs": torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device),
+        "actions" : torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device),
+        "logprobs" : torch.zeros((args.num_steps, args.num_envs)).to(device),
+        "rewards" : torch.zeros((args.num_steps, args.num_envs)).to(device),
+        "dones" :  torch.zeros((args.num_steps, args.num_envs)).to(device),
+        "values" : torch.zeros((args.num_steps, args.num_envs)).to(device),
+    })
+    # obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
+    # actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
+    # logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    # rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    # dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    # values = torch.zeros((args.num_steps, args.num_envs)).to(device)
 
     # TRY NOT TO MODIFY: start the game
     global_step = 0
@@ -206,20 +216,20 @@ if __name__ == "__main__":
 
         for step in range(0, args.num_steps):
             global_step += args.num_envs
-            obs[step] = next_obs
-            dones[step] = next_done
+            buffer['obs'][step] = next_obs
+            buffer['dones'][step] = next_done
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
                 action, logprob, _, value = agent.get_action_and_value(next_obs)
-                values[step] = value.flatten()
-            actions[step] = action
-            logprobs[step] = logprob
+                buffer["values"][step] = value.flatten()
+            buffer["actions"][step] = action
+            buffer["logprobs"][step] = logprob
 
             # TRY NOT TO MODIFY: execute the game and log data.
             next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
             next_done = np.logical_or(terminations, truncations)
-            rewards[step] = torch.tensor(reward).to(device).view(-1)
+            buffer["rewards"][step] = torch.tensor(reward).to(device).view(-1)
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
 
             if "final_info" in infos:
@@ -232,26 +242,26 @@ if __name__ == "__main__":
         # bootstrap value if not done
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
-            advantages = torch.zeros_like(rewards).to(device)
+            advantages = torch.zeros_like(buffer["rewards"]).to(device)
             lastgaelam = 0
             for t in reversed(range(args.num_steps)):
                 if t == args.num_steps - 1:
                     nextnonterminal = 1.0 - next_done
                     nextvalues = next_value
                 else:
-                    nextnonterminal = 1.0 - dones[t + 1]
-                    nextvalues = values[t + 1]
-                delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
+                    nextnonterminal = 1.0 - buffer["dones"][t + 1]
+                    nextvalues = buffer["values"][t + 1]
+                delta = buffer["rewards"][t] + args.gamma * nextvalues * nextnonterminal - buffer["values"][t]
                 advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-            returns = advantages + values
+            returns = advantages + buffer["values"]
 
         # flatten the batch
-        b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
-        b_logprobs = logprobs.reshape(-1)
-        b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
+        b_obs = buffer["obs"].reshape((-1,) + envs.single_observation_space.shape)
+        b_logprobs = buffer["logprobs"].reshape(-1)
+        b_actions = buffer["actions"].reshape((-1,) + envs.single_action_space.shape)
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
-        b_values = values.reshape(-1)
+        b_values = buffer["values"].reshape(-1)
 
         # Optimizing the policy and value network
         b_inds = np.arange(args.batch_size)
