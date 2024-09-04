@@ -3,6 +3,7 @@ import os
 import random
 import time
 from dataclasses import dataclass
+import datetime
 
 import gymnasium as gym
 import numpy as np
@@ -48,7 +49,7 @@ class Args:
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 1
+    num_envs: int = 3
     """the number of parallel game environments"""
     num_steps: int = 2048
     """the number of steps to run in each environment per policy rollout"""
@@ -134,9 +135,9 @@ class Agent(nn.Module):
         return self.critic(x)
 
     def get_action_and_value(self, x, action=None):
-        action_mean = self.actor_mean(x)
-        action_logstd = self.actor_logstd.expand_as(action_mean)
-        action_std = torch.exp(action_logstd)
+        action_mean = self.actor_mean(x)  # [1, 6]
+        action_logstd = self.actor_logstd.expand_as(action_mean)  # [1, 6]
+        action_std = torch.exp(action_logstd)  # [1, 6]
         probs = Normal(action_mean, action_std)
         if action is None:
             action = probs.sample()
@@ -148,7 +149,9 @@ if __name__ == "__main__":
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.exp_name}__{args.seed}__{int(time.time())}"
+    current_time = datetime.datetime.now()
+    run_name = f"{args.exp_name}__{args.seed}__{current_time.strftime('%m%d%y_%H%M')}"
+
     if args.track:
         import wandb
 
@@ -256,12 +259,12 @@ if __name__ == "__main__":
             returns = advantages + buffer["values"]
 
         # flatten the batch
-        b_obs = buffer["obs"].reshape((-1,) + envs.single_observation_space.shape)
-        b_logprobs = buffer["logprobs"].reshape(-1)
-        b_actions = buffer["actions"].reshape((-1,) + envs.single_action_space.shape)
-        b_advantages = advantages.reshape(-1)
-        b_returns = returns.reshape(-1)
-        b_values = buffer["values"].reshape(-1)
+        b_obs = buffer["obs"].reshape((-1,) + envs.single_observation_space.shape)  # [batch_size, 17]
+        b_logprobs = buffer["logprobs"].reshape(-1)  # [batch_size]
+        b_actions = buffer["actions"].reshape((-1,) + envs.single_action_space.shape)  # [batch_size, 6]
+        b_advantages = advantages.reshape(-1)  # [batch_size]
+        b_returns = returns.reshape(-1)  # [batch_size]
+        b_values = buffer["values"].reshape(-1)  # [batch_size]
 
         # Optimizing the policy and value network
         b_inds = np.arange(args.batch_size)
