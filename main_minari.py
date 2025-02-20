@@ -1,6 +1,8 @@
 import minari
 import os
 from huggingface_hub import login
+import torch
+import torch.nn as nn
 
 # access_token = os.environ["HUGGINGFACE_READ_TOKEN"]
 # login(token = access_token ,add_to_git_credential=True)
