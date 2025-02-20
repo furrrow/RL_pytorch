@@ -26,3 +26,5 @@ dependencies:
     - tyro
     - stable_baselines3
     - wandb
+    - huggingface
+    - minari

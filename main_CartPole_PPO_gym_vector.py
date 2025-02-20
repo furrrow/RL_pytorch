@@ -319,7 +319,7 @@ class PPO:
         self.n_workers = n_envs
         self.device = device
         self.eval_history = None
-        self.envs = gym.vector.make(env_id, num_envs=n_envs)
+        self.envs = gym.make_vec(env_id, num_envs=n_envs)
         self.eval_env = gym.make(self.env_id)
         self.n_states = self.envs.single_observation_space.shape[0]
         self.n_action = self.envs.single_action_space.n
@@ -474,6 +474,12 @@ class PPO:
         self.eval_history = np.array(self.eval_history)
         return self.eval_history
 
+    def save_model(self, save_path):
+        torch.save({
+            "policy_model": self.policy_model.state_dict(),
+            "value_model": self.value_model.state_dict(),
+        }, save_path)
+
 
 if __name__ == '__main__':
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -483,10 +489,11 @@ if __name__ == '__main__':
     tau = 0.97
     gamma = 1.0
     env_id = "CartPole-v1"
-    EPOCHS = 100
-    n_workers = 2
+    EPOCHS = 80
+    n_workers = 8
     max_episodes = 16
     max_episode_steps = 1000  # truncated step set by env will take precedence
     agent = PPO(env_id, LR, tau, gamma, max_episodes, max_episode_steps, n_workers, device)
     agent.train(EPOCHS)
+    agent.save_model(save_path= "./saves/PPO_gym_vector_CartPole.pt")
     plot_training_history(agent.rewards_history, save=False)
