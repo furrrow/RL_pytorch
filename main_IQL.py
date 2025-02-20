@@ -10,7 +10,8 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.distributions import MultivariateNormal
 from torchrl.data.datasets.minari_data import MinariExperienceReplay
 from torchrl.data.replay_buffers import SamplerWithoutReplacement
-
+import matplotlib.pyplot as plt
+import numpy as np
 """
 Implicit Q-learning implementation,
 borrowing heavily from:
@@ -95,6 +96,9 @@ class ImplicitQLearning(nn.Module):
         self.discount = discount
         self.alpha = alpha
         self.device = device
+        self.q_loss_hist = []
+        self.v_loss_hist = []
+        self.policy_loss_hist = []
 
     def update(self, observations, actions, next_observations, rewards, terminals):
         with torch.no_grad():
@@ -107,6 +111,7 @@ class ImplicitQLearning(nn.Module):
         v = self.vf(observations)
         adv = target_q - v
         v_loss = asymmetric_l2_loss(adv, self.tau)
+        self.v_loss_hist.append(v_loss.item())
         self.v_optimizer.zero_grad(set_to_none=True)
         v_loss.backward()
         self.v_optimizer.step()
@@ -115,6 +120,7 @@ class ImplicitQLearning(nn.Module):
         targets = rewards + (1. - terminals.float()) * self.discount * next_v.detach()
         qs = self.qf.both(observations, actions)
         q_loss = sum(F.mse_loss(q, targets) for q in qs) / len(qs)
+        self.q_loss_hist.append(q_loss.item())
         self.q_optimizer.zero_grad(set_to_none=True)
         q_loss.backward()
         self.q_optimizer.step()
@@ -134,6 +140,7 @@ class ImplicitQLearning(nn.Module):
             raise NotImplementedError
         policy_loss = torch.mean(exp_adv * bc_losses)
         self.policy_optimizer.zero_grad(set_to_none=True)
+        self.policy_loss_hist.append(policy_loss.item())
         policy_loss.backward()
         self.policy_optimizer.step()
         self.policy_lr_schedule.step()
@@ -188,18 +195,21 @@ if __name__ == '__main__':
     tau = 0.005
     alpha = 0.005
     beta = 3.0
-    max_steps = 10**6
+    # max_steps = 10**6
+    max_steps = 50000
     gamma = 0.99
     hidden_dim = 256
     n_hidden = 2
+    eval_period = 10
+    max_eval_steps = 1000
     # dataset_id = "mujoco/hopper/simple-v0"
-    dataset_id = "mujoco/hopper/medium-v0"
-    # dataset_id = "mujoco/hopper/expert-v0"
+    # dataset_id = "mujoco/hopper/medium-v0"
+    dataset_id = "mujoco/hopper/expert-v0"
     dataset = minari.load_dataset(dataset_id, download=True)
-    print("Observation space:", dataset.observation_space)
-    print("Action space:", dataset.action_space)
-    print("Total episodes:", dataset.total_episodes)
-    print("Total steps:", dataset.total_steps)
+    # print("Observation space:", dataset.observation_space)
+    # print("Action space:", dataset.action_space)
+    # print("Total episodes:", dataset.total_episodes)
+    # print("Total steps:", dataset.total_steps)
     env = dataset.recover_environment()
 
     n_states = dataset.observation_space.shape[0]
@@ -227,30 +237,48 @@ if __name__ == '__main__':
         alpha=alpha,
         discount=gamma,
     )
+    eval_history = []
     for step in range(max_steps):
         # tensordict keys: ['episode', 'action', 'next', 'observation', 'index']
         data = replay_buffer.sample()
-        print(len(data))
         terminals = data['next']['done'] # terminal or truncated?
-        # todo: where are the current state rewards?!
-        data_input = (data['observation'], data['action'], data['next']['observation'], rewards, terminals)
-        iql.update(data_input)
+        data_input = (data['observation'], data['action'], data['next']['observation'], data['next']['reward'], terminals)
+        iql.update(data_input[0].to(torch.float32), data_input[1].to(torch.float32), data_input[2].to(torch.float32),
+                   data_input[3].to(torch.float32), data_input[4].to(torch.float32))
 
-        # if (step + 1) % eval_period == 0:
-        #     # evaluate_policy:
-        #     obs = env.reset()
-        #     total_reward = 0.
-        #     for _ in range(max_episode_steps):
-        #         with torch.no_grad():
-        #             action = policy.act(torchify(obs), deterministic=deterministic).cpu().numpy()
-        #         next_obs, reward, done, info = env.step(action)
-        #         total_reward += reward
-        #         if done:
-        #             break
-        #         else:
-        #             obs = next_obs
-        #     return total_reward
-        #
-        #     eval_returns = np.array([evaluate_policy(env, policy, args.max_episode_steps) \
-        #                              for _ in range(args.n_eval_episodes)])
-        #     normalized_returns = d4rl.get_normalized_score(args.env_name, eval_returns) * 100.0
+        if (step + 1) % eval_period == 0:
+            # evaluate_policy:
+            obs = env.reset()
+            obs = obs[0]
+            total_reward = 0.
+            for _ in range(max_eval_steps):
+                with torch.no_grad():
+                    obs = torch.from_numpy(obs).to(torch.float32)
+                    action = policy.act(obs, deterministic=True).cpu().numpy()
+                next_obs, reward, terminated, truncated, info = env.step(action)
+                total_reward += reward
+                if terminated or truncated:
+                    break
+                else:
+                    obs = next_obs
+            # min_score, max_score = 0, 190
+            # normalized_returns = (total_reward - min_score) / (max_score - min_score) * 100.0
+            eval_history.append([step, total_reward])
+            print(f"step {step} total_reward: {total_reward:.3f}")
+
+    x = np.arange(len(iql.v_loss_hist))
+    fig, ax = plt.subplots(1, 1)
+    ax.plot(x, iql.v_loss_hist, label='v_loss')
+    ax.plot(x, iql.q_loss_hist, label='q_loss')
+    ax.plot(x, iql.policy_loss_hist, label='policy_loss')
+    ax.set_xlabel('steps')
+    ax.set_title('loss_history')
+    ax.legend()
+
+    fig2, ax2 = plt.subplots(1, 1)
+    eval_history = np.array(eval_history)
+    ax2.plot(eval_history[:, 0], eval_history[:, 1], label='eval rewards')
+    ax2.set_xlabel('steps')
+    ax2.set_title('rewards during evaluation')
+    plt.show()
+
